@@ -243,6 +243,13 @@ def inject_css() -> None:
 
         .category-title { font-size: 24px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: #1f2d3d; }
 
+        .product-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
         .product-link { text-decoration: none !important; color: inherit !important; display: block; }
         .product-card {
             background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 12px;
@@ -290,8 +297,11 @@ def inject_css() -> None:
             .title { min-height: auto; font-size: 15px; }
             .price { font-size: 24px; }
             .detail { padding: 16px; border-radius: 18px; }
+            .product-grid {
+                grid-template-columns: 1fr;
+                gap: .85rem;
+            }
             .product-card { padding: 10px; border-radius: 16px; }
-            div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
             div[data-testid="stHorizontalBlock"] { gap: .55rem; }
         }
         </style>
@@ -426,7 +436,7 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     return result.reset_index(drop=True), selected_category, selected_subcategory
 
 
-def render_card(row: pd.Series) -> None:
+def render_card_html(row: pd.Series) -> str:
     image_src = image_to_src(row["primary_image_resolved"])
     category = html.escape(clean_str(row["category_nav"]) or "—")
     subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
@@ -443,8 +453,7 @@ def render_card(row: pd.Series) -> None:
 
     image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
 
-    st.markdown(
-        f"""
+    return f"""
         <a class="product-link" href="?offer_id={offer_id}" target="_self">
             <div class="product-card">
                 <div class="num-badge">№ {int(row["catalog_number"])}</div>
@@ -462,9 +471,7 @@ def render_card(row: pd.Series) -> None:
                 </div>
             </div>
         </a>
-        """,
-        unsafe_allow_html=True,
-    )
+    """
 
 
 def render_catalog_page(df: pd.DataFrame) -> None:
@@ -488,11 +495,8 @@ def render_catalog_page(df: pd.DataFrame) -> None:
             st.rerun()
 
     items = df.iloc[start:end]
-    cols = st.columns(4)
-    for idx, (_, row) in enumerate(items.iterrows()):
-        with cols[idx % 4]:
-            render_card(row)
-
+    cards_html = "\n".join(render_card_html(row) for _, row in items.iterrows())
+    st.markdown(f'<div class="product-grid">{cards_html}</div>', unsafe_allow_html=True)
 
 def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     item = df[df["offer_id"].astype(str) == str(offer_id)]
