@@ -107,11 +107,14 @@ def load_catalog() -> pd.DataFrame:
     df["subcategory_nav"] = get_col(df, "local_category_2", "").map(clean_str)
 
     # Ozon-категория отдельно, только как справка
-    df["ozon_category_display"] = get_col(
-        df,
-        "ozon_category_name",
-        get_col(df, "aggr_final_category", get_col(df, "mapped_ozon_category_name", "")),
-    ).map(clean_str)
+    if "ozon_category_name" in df.columns:
+        df["ozon_category_display"] = df["ozon_category_name"].map(clean_str)
+    elif "aggr_final_category" in df.columns:
+        df["ozon_category_display"] = df["aggr_final_category"].map(clean_str)
+    elif "mapped_ozon_category_name" in df.columns:
+        df["ozon_category_display"] = df["mapped_ozon_category_name"].map(clean_str)
+    else:
+        df["ozon_category_display"] = ""
 
     # Группа — больше НЕ используем как категорию
     df["group_name_clean"] = get_col(df, "group_name", "").map(clean_str)
