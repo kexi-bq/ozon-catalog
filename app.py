@@ -9,7 +9,8 @@ import streamlit as st
 
 
 APP_DIR = Path(__file__).resolve().parent
-DATA_PATH = APP_DIR / "data" / "catalog_500.xlsx"
+ROOT = APP_DIR.parent
+DATA_PATH = APP_DIR / "data" / "catalog_2000.xlsx"
 PAGE_SIZE = 24
 
 
@@ -52,12 +53,22 @@ def resolve_image(value: str) -> str:
     path = APP_DIR / text
     if path.exists():
         return str(path)
+    root_path = ROOT / text
+    if root_path.exists():
+        return str(root_path)
+    raw_path = Path(text)
+    if raw_path.is_absolute() and raw_path.exists():
+        return str(raw_path)
     return ""
 
 
 @st.cache_data(show_spinner=True)
 def load_catalog() -> pd.DataFrame:
     df = pd.read_excel(DATA_PATH, dtype=object)
+    df["group_name_clean"] = df["group_name"].map(clean_str)
+    df["brand_clean"] = df["brand"].map(clean_str)
+    df["category_nav"] = df["group_name_clean"]
+    df["subcategory_nav"] = df["brand_clean"]
     df["retail_price_num"] = df["retail_price"].map(clean_float).fillna(0.0)
     df["ozon_price_num"] = df["ozon_price"].map(clean_float).fillna(df["retail_price_num"])
     df["stock_qty_num"] = df["stock_qty"].map(clean_float).fillna(0)
@@ -72,9 +83,9 @@ def load_catalog() -> pd.DataFrame:
         + " "
         + df["full_name"].fillna("").astype(str)
         + " "
-        + df["brand"].fillna("").astype(str)
+        + df["brand_clean"].fillna("").astype(str)
         + " "
-        + df["group_name"].fillna("").astype(str)
+        + df["group_name_clean"].fillna("").astype(str)
     ).str.lower()
     return df.sort_values(["brand", "title", "offer_id"], kind="stable").reset_index(drop=True)
 
@@ -138,12 +149,64 @@ def render_metrics(df: pd.DataFrame) -> None:
             )
 
 
+def render_category_shortcuts(df: pd.DataFrame) -> None:
+    category_counts = (
+        df[df["category_nav"].astype(str).str.strip().ne("")]
+        .groupby("category_nav")
+        .size()
+        .sort_values(ascending=False)
+        .head(12)
+    )
+    if category_counts.empty:
+        return
+
+    st.markdown("### Категории")
+    cols = st.columns(4)
+    for idx, (category_name, count) in enumerate(category_counts.items()):
+        with cols[idx % 4]:
+            if st.button(f"{category_name} ({count})", key=f"cat_shortcut_{idx}", use_container_width=True):
+                st.query_params["category"] = category_name
+                st.query_params.pop("subcategory", None)
+                st.rerun()
+
+
 def filter_catalog(df: pd.DataFrame) -> pd.DataFrame:
     st.sidebar.header("Фильтры")
     query = st.sidebar.text_input("Поиск", placeholder="Артикул, код, название, бренд, группа")
-    selected_brands = st.sidebar.multiselect("Бренд", sorted(df["brand"].dropna().unique().tolist()))
-    selected_groups = st.sidebar.multiselect("Группа", sorted(df["group_name"].dropna().unique().tolist()))
+    category_options = sorted([x for x in df["category_nav"].dropna().unique().tolist() if clean_str(x)])
+    category_from_query = clean_str(st.query_params.get("category", ""))
+    category_index = category_options.index(category_from_query) + 1 if category_from_query in category_options else 0
+    selected_category = st.sidebar.selectbox(
+        "Категория",
+        ["Все категории"] + category_options,
+        index=category_index,
+    )
+
+    subcategory_pool = df.copy()
+    if selected_category != "Все категории":
+        subcategory_pool = subcategory_pool[subcategory_pool["category_nav"] == selected_category]
+    subcategory_options = sorted([x for x in subcategory_pool["subcategory_nav"].dropna().unique().tolist() if clean_str(x)])
+    subcategory_from_query = clean_str(st.query_params.get("subcategory", ""))
+    subcategory_index = subcategory_options.index(subcategory_from_query) + 1 if subcategory_from_query in subcategory_options else 0
+    selected_subcategory = st.sidebar.selectbox(
+        "Подкатегория",
+        ["Все подкатегории"] + subcategory_options,
+        index=subcategory_index,
+    )
+
+    if selected_category != "Все категории":
+        st.query_params["category"] = selected_category
+    else:
+        st.query_params.pop("category", None)
+    if selected_subcategory != "Все подкатегории":
+        st.query_params["subcategory"] = selected_subcategory
+    else:
+        st.query_params.pop("subcategory", None)
+
+    selected_brands = st.sidebar.multiselect("Бренд", sorted(df["brand_clean"].dropna().unique().tolist()))
+    selected_groups = st.sidebar.multiselect("Группа", sorted(df["group_name_clean"].dropna().unique().tolist()))
     only_in_stock = st.sidebar.checkbox("Только в наличии")
+    only_with_photo = st.sidebar.checkbox("Только с фото", value=True)
     min_price = int(df["ozon_price_num"].min()) if not df.empty else 0
     max_price = int(df["ozon_price_num"].max()) if not df.empty else 0
     price_range = st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price)) if max_price > min_price else (min_price, max_price)
@@ -152,12 +215,18 @@ def filter_catalog(df: pd.DataFrame) -> pd.DataFrame:
     result = df.copy()
     if query.strip():
         result = result[result["search_blob"].str.contains(query.lower(), na=False)]
+    if selected_category != "Все категории":
+        result = result[result["category_nav"] == selected_category]
+    if selected_subcategory != "Все подкатегории":
+        result = result[result["subcategory_nav"] == selected_subcategory]
     if selected_brands:
-        result = result[result["brand"].isin(selected_brands)]
+        result = result[result["brand_clean"].isin(selected_brands)]
     if selected_groups:
-        result = result[result["group_name"].isin(selected_groups)]
+        result = result[result["group_name_clean"].isin(selected_groups)]
     if only_in_stock:
         result = result[result["stock_qty_num"] > 0]
+    if only_with_photo:
+        result = result[result["has_image"]]
     result = result[(result["ozon_price_num"] >= price_range[0]) & (result["ozon_price_num"] <= price_range[1])]
 
     if sort_by == "Цена: ниже":
@@ -267,15 +336,15 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Catalog 500", page_icon="🛒", layout="wide")
+    st.set_page_config(page_title="Catalog 2000", page_icon="🛒", layout="wide")
     inject_css()
     df = load_catalog()
 
     st.markdown(
         """
         <div class="topbar">
-            <h1>Catalog 500</h1>
-            <p>Git-ready витрина: 500 не метражных товаров с фото из локальной базы.</p>
+            <h1>Catalog 2000</h1>
+            <p>Git-ready витрина: 2000 не метражных товаров с реальными фото из локальной базы.</p>
         </div>
         """,
         unsafe_allow_html=True,
@@ -288,6 +357,7 @@ def main() -> None:
 
     filtered = filter_catalog(df)
     render_metrics(filtered)
+    render_category_shortcuts(filtered if not filtered.empty else df)
     st.write(f"Показано товаров: {len(filtered):,}".replace(",", " "))
     render_catalog_page(filtered)
 
