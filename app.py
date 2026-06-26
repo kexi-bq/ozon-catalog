@@ -436,6 +436,7 @@ def render_card(row: pd.Series) -> None:
     code = html.escape(clean_str(row["code"]))
     stock_text = html.escape(clean_str(row["stock_text"]))
     badge_class = "badge" if row["stock_qty_num"] > 0 else "badge out"
+
     old_price = ""
     if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
         old_price = f'<div class="old">{html.escape(format_price(row["retail_price_num"]))}</div>'
@@ -444,7 +445,7 @@ def render_card(row: pd.Series) -> None:
 
     st.markdown(
         f"""
-        <a class="product-link" href="?offer_id={offer_id}">
+        <a class="product-link" href="?offer_id={offer_id}" target="_self">
             <div class="product-card">
                 <div class="num-badge">№ {int(row["catalog_number"])}</div>
                 {image_html}
