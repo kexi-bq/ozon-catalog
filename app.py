@@ -243,13 +243,6 @@ def inject_css() -> None:
 
         .category-title { font-size: 24px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: #1f2d3d; }
 
-        .product-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 1rem;
-            margin-top: 1rem;
-        }
-
         .product-link { text-decoration: none !important; color: inherit !important; display: block; }
         .product-card {
             background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 12px;
@@ -258,6 +251,17 @@ def inject_css() -> None:
         .product-card:hover {
             transform: translateY(-2px); box-shadow: 0 10px 26px rgba(15, 35, 80, .12); border-color: #8cb6ff;
         }
+        .catalog-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 1rem;
+            align-items: stretch;
+        }
+
+        .catalog-grid .product-link {
+            height: 100%;
+        }
+
         .product-image {
             width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fbff;
             border-radius: 14px; display: block; margin-bottom: 10px;
@@ -286,6 +290,14 @@ def inject_css() -> None:
         div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
         img { border-radius: 14px; }
 
+        @media (max-width: 1100px) {
+            .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+        }
+
+        @media (max-width: 900px) {
+            .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+        }
+
         @media (max-width: 768px) {
             .block-container { padding-left: .7rem; padding-right: .7rem; padding-top: .6rem; }
             .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
@@ -297,11 +309,8 @@ def inject_css() -> None:
             .title { min-height: auto; font-size: 15px; }
             .price { font-size: 24px; }
             .detail { padding: 16px; border-radius: 18px; }
-            .product-grid {
-                grid-template-columns: 1fr;
-                gap: .85rem;
-            }
             .product-card { padding: 10px; border-radius: 16px; }
+            .catalog-grid { grid-template-columns: 1fr; gap: .75rem; }
             div[data-testid="stHorizontalBlock"] { gap: .55rem; }
         }
         </style>
@@ -436,7 +445,7 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     return result.reset_index(drop=True), selected_category, selected_subcategory
 
 
-def render_card_html(row: pd.Series) -> str:
+def build_card_html(row: pd.Series) -> str:
     image_src = image_to_src(row["primary_image_resolved"])
     category = html.escape(clean_str(row["category_nav"]) or "—")
     subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
@@ -474,6 +483,9 @@ def render_card_html(row: pd.Series) -> str:
     """
 
 
+def render_card(row: pd.Series) -> None:
+    st.markdown(build_card_html(row), unsafe_allow_html=True)
+
 def render_catalog_page(df: pd.DataFrame) -> None:
     total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
     page = int(st.query_params.get("page", "1"))
@@ -495,8 +507,13 @@ def render_catalog_page(df: pd.DataFrame) -> None:
             st.rerun()
 
     items = df.iloc[start:end]
-    cards_html = "\n".join(render_card_html(row) for _, row in items.iterrows())
-    st.markdown(f'<div class="product-grid">{cards_html}</div>', unsafe_allow_html=True)
+
+    # Важно: не используем st.columns для карточек.
+    # На телефоне Streamlit колонки складывает вертикально по колонкам,
+    # из-за этого номера шли 1,5,9... Вместо этого отрисовываем одну CSS-grid
+    # сетку: порядок в HTML остается 1,2,3,4... при любой ширине экрана.
+    cards_html = "\n".join(build_card_html(row) for _, row in items.iterrows())
+    st.markdown(f'<div class="catalog-grid">{cards_html}</div>', unsafe_allow_html=True)
 
 def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     item = df[df["offer_id"].astype(str) == str(offer_id)]
