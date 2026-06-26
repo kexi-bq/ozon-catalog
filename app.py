@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import ast
+import base64
+import html
 import math
 from pathlib import Path
 from typing import Any
@@ -28,11 +30,9 @@ def clean_float(value: Any) -> float | None:
         return None
     if isinstance(value, float) and pd.isna(value):
         return None
-
     text = str(value).strip()
     if not text:
         return None
-
     text = (
         text.replace("\u00a0", "")
         .replace("₽", "")
@@ -41,7 +41,6 @@ def clean_float(value: Any) -> float | None:
         .replace(" ", "")
         .replace(",", ".")
     )
-
     try:
         return float(text)
     except Exception:
@@ -52,7 +51,6 @@ def first_image(value: Any) -> str:
     text = clean_str(value)
     if not text:
         return ""
-
     if text.startswith("[") and text.endswith("]"):
         try:
             parsed = ast.literal_eval(text)
@@ -60,7 +58,6 @@ def first_image(value: Any) -> str:
                 return clean_str(parsed[0])
         except Exception:
             pass
-
     return text
 
 
@@ -68,23 +65,38 @@ def resolve_image(value: Any) -> str:
     text = first_image(value)
     if not text:
         return ""
-
     if text.startswith(("http://", "https://")):
         return text
-
     path = APP_DIR / text
     if path.exists():
         return str(path)
-
     root_path = ROOT / text
     if root_path.exists():
         return str(root_path)
-
     raw_path = Path(text)
     if raw_path.is_absolute() and raw_path.exists():
         return str(raw_path)
-
     return ""
+
+
+@st.cache_data(show_spinner=False)
+def image_to_src(path_or_url: str) -> str:
+    text = clean_str(path_or_url)
+    if not text:
+        return ""
+    if text.startswith(("http://", "https://")):
+        return text
+    path = Path(text)
+    if not path.exists():
+        return ""
+    suffix = path.suffix.lower()
+    mime = "image/jpeg"
+    if suffix == ".png":
+        mime = "image/png"
+    elif suffix == ".webp":
+        mime = "image/webp"
+    data = base64.b64encode(path.read_bytes()).decode("utf-8")
+    return f"data:{mime};base64,{data}"
 
 
 def get_col(df: pd.DataFrame, name: str, default: Any = "") -> pd.Series:
@@ -127,8 +139,6 @@ def load_catalog() -> pd.DataFrame:
         df["ozon_category_display"] = df["mapped_ozon_category_name"].map(clean_str)
     else:
         df["ozon_category_display"] = ""
-
-    df["group_name_clean"] = get_col(df, "group_name", "").map(clean_str)
 
     df["retail_price_num"] = get_col(df, "retail_price", 0).map(clean_float).fillna(0.0)
     if df["retail_price_num"].eq(0).all() and "price" in df.columns:
@@ -192,7 +202,6 @@ def load_catalog() -> pd.DataFrame:
     ).reset_index(drop=True)
 
     df["catalog_number"] = range(1, len(df) + 1)
-
     return df
 
 
@@ -202,228 +211,88 @@ def format_price(value: float | int | None) -> str:
     return f"{int(math.ceil(float(value))):,} ₽".replace(",", " ")
 
 
+def format_dimensions(row: pd.Series) -> str:
+    length = clean_str(row["length"])
+    width = clean_str(row["width"])
+    height = clean_str(row["height"])
+    parts = [x for x in [length, width, height] if x]
+    if len(parts) == 3:
+        return f"{length} × {width} × {height}"
+    return "—"
+
+
 def inject_css() -> None:
     st.markdown(
         """
         <style>
-        .stApp {
-            background: #f4f7fb;
-        }
-
-        .block-container {
-            max-width: 1380px;
-            padding-top: 1rem;
-            padding-bottom: 2rem;
-        }
+        .stApp { background: #f4f7fb; }
+        .block-container { max-width: 1380px; padding-top: 1rem; padding-bottom: 2rem; }
 
         .topbar {
             background: linear-gradient(135deg, #005bff 0%, #2b7cff 60%, #8cb6ff 100%);
-            border-radius: 24px;
-            padding: 20px 24px;
-            color: white;
-            margin-bottom: 18px;
+            border-radius: 24px; padding: 20px 24px; color: white; margin-bottom: 18px;
         }
-
-        .topbar h1 {
-            margin: 0;
-            font-size: 34px;
-            font-weight: 800;
-        }
-
-        .topbar p {
-            margin: 8px 0 0 0;
-            font-size: 14px;
-            color: rgba(255,255,255,.9);
-        }
+        .topbar h1 { margin: 0; font-size: 34px; font-weight: 800; }
+        .topbar p { margin: 8px 0 0 0; font-size: 14px; color: rgba(255,255,255,.9); }
 
         .metric {
-            background: white;
-            border: 1px solid #dfe7f2;
-            border-radius: 18px;
-            padding: 16px 18px;
+            background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 16px 18px;
         }
+        .metric-label { color: #607087; font-size: 12px; margin-bottom: 6px; }
+        .metric-value { color: #1f2d3d; font-size: 24px; font-weight: 800; }
 
-        .metric-label {
-            color: #607087;
-            font-size: 12px;
-            margin-bottom: 6px;
+        .category-title { font-size: 24px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: #1f2d3d; }
+
+        .product-link { text-decoration: none !important; color: inherit !important; display: block; }
+        .product-card {
+            background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 12px;
+            min-height: 100%; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
         }
-
-        .metric-value {
-            color: #1f2d3d;
-            font-size: 24px;
-            font-weight: 800;
+        .product-card:hover {
+            transform: translateY(-2px); box-shadow: 0 10px 26px rgba(15, 35, 80, .12); border-color: #8cb6ff;
         }
-
-        .category-title {
-            font-size: 24px;
-            font-weight: 800;
-            margin-top: 18px;
-            margin-bottom: 10px;
-            color: #1f2d3d;
+        .product-image {
+            width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fbff;
+            border-radius: 14px; display: block; margin-bottom: 10px;
         }
-
         .num-badge {
-            display: inline-block;
-            background: #eef4ff;
-            color: #005bff;
-            border: 1px solid #cfe0ff;
-            border-radius: 999px;
-            padding: 4px 9px;
-            font-size: 12px;
-            font-weight: 800;
-            margin-bottom: 8px;
+            display: inline-block; background: #eef4ff; color: #005bff; border: 1px solid #cfe0ff;
+            border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 800; margin-bottom: 8px;
         }
-
-        .brand {
-            font-size: 11px;
-            color: #005bff;
-            font-weight: 700;
-            text-transform: uppercase;
-        }
-
-        .title {
-            font-size: 15px;
-            line-height: 1.35;
-            font-weight: 700;
-            color: #162033;
-            min-height: 62px;
-            margin: 8px 0 10px 0;
-        }
-
-        .price {
-            font-size: 26px;
-            font-weight: 800;
-            color: #f91155;
-            margin: 8px 0 2px 0;
-        }
-
-        .old {
-            font-size: 13px;
-            color: #8a97a8;
-            text-decoration: line-through;
-        }
-
-        .meta {
-            font-size: 12px;
-            color: #607087;
-            line-height: 1.55;
-            margin-top: 10px;
-        }
+        .brand { font-size: 11px; color: #005bff; font-weight: 700; text-transform: uppercase; }
+        .title { font-size: 15px; line-height: 1.35; font-weight: 700; color: #162033; min-height: 62px; margin: 8px 0 10px 0; }
+        .price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
+        .old { font-size: 13px; color: #8a97a8; text-decoration: line-through; }
+        .meta { font-size: 12px; color: #607087; line-height: 1.55; margin-top: 10px; }
 
         .badge {
-            display: inline-block;
-            padding: 5px 10px;
-            border-radius: 999px;
-            font-size: 12px;
-            font-weight: 700;
-            margin-top: 8px;
-            background: #eaf8ef;
-            color: #138a43;
+            display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+            margin-top: 8px; background: #eaf8ef; color: #138a43;
         }
+        .badge.out { background: #fff2e2; color: #a45d00; }
 
-        .badge.out {
-            background: #fff2e2;
-            color: #a45d00;
-        }
+        .detail { background: white; border: 1px solid #dfe7f2; border-radius: 24px; padding: 24px; }
+        .spec { background: #f8fbff; border: 1px solid #e4edf9; border-radius: 18px; padding: 14px 16px; margin-bottom: 10px; }
+        .spec-label { font-size: 12px; color: #718198; margin-bottom: 4px; }
+        .spec-value { font-size: 15px; color: #18253a; font-weight: 600; word-break: break-word; }
 
-        .detail {
-            background: white;
-            border: 1px solid #dfe7f2;
-            border-radius: 24px;
-            padding: 24px;
-        }
-
-        .spec {
-            background: #f8fbff;
-            border: 1px solid #e4edf9;
-            border-radius: 18px;
-            padding: 14px 16px;
-            margin-bottom: 10px;
-        }
-
-        .spec-label {
-            font-size: 12px;
-            color: #718198;
-            margin-bottom: 4px;
-        }
-
-        .spec-value {
-            font-size: 15px;
-            color: #18253a;
-            font-weight: 600;
-            word-break: break-word;
-        }
-
-        div[data-testid="stButton"] button {
-            border-radius: 14px;
-            min-height: 42px;
-            white-space: normal;
-        }
-
-        img {
-            border-radius: 14px;
-        }
+        div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
+        img { border-radius: 14px; }
 
         @media (max-width: 768px) {
-            .block-container {
-                padding-left: 0.7rem;
-                padding-right: 0.7rem;
-                padding-top: 0.6rem;
-            }
-
-            .topbar {
-                border-radius: 18px;
-                padding: 16px 16px;
-                margin-bottom: 12px;
-            }
-
-            .topbar h1 {
-                font-size: 25px;
-                line-height: 1.15;
-            }
-
-            .topbar p {
-                font-size: 12px;
-                line-height: 1.35;
-            }
-
-            .metric {
-                padding: 12px 13px;
-                border-radius: 14px;
-            }
-
-            .metric-value {
-                font-size: 20px;
-            }
-
-            .category-title {
-                font-size: 20px;
-            }
-
-            .title {
-                min-height: auto;
-                font-size: 15px;
-            }
-
-            .price {
-                font-size: 24px;
-            }
-
-            .detail {
-                padding: 16px;
-                border-radius: 18px;
-            }
-
-            div[data-testid="column"] {
-                width: 100% !important;
-                flex: 1 1 100% !important;
-                min-width: 100% !important;
-            }
-
-            div[data-testid="stHorizontalBlock"] {
-                gap: 0.55rem;
-            }
+            .block-container { padding-left: .7rem; padding-right: .7rem; padding-top: .6rem; }
+            .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
+            .topbar h1 { font-size: 25px; line-height: 1.15; }
+            .topbar p { font-size: 12px; line-height: 1.35; }
+            .metric { padding: 12px 13px; border-radius: 14px; }
+            .metric-value { font-size: 20px; }
+            .category-title { font-size: 20px; }
+            .title { min-height: auto; font-size: 15px; }
+            .price { font-size: 24px; }
+            .detail { padding: 16px; border-radius: 18px; }
+            .product-card { padding: 10px; border-radius: 16px; }
+            div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
+            div[data-testid="stHorizontalBlock"] { gap: .55rem; }
         }
         </style>
         """,
@@ -439,30 +308,21 @@ def render_metrics(df: pd.DataFrame) -> None:
         ("Брендов", f"{int(df['brand_clean'].nunique()):,}".replace(",", " ")),
         ("Средняя цена", format_price(df["ozon_price_num"].mean() if not df.empty else 0)),
     ]
-
     for col, (label, value) in zip((c1, c2, c3, c4), values):
         with col:
-            st.markdown(
-                f'<div class="metric"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>',
-                unsafe_allow_html=True,
-            )
+            st.markdown(f'<div class="metric"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
 
 
 def render_category_shortcuts(df: pd.DataFrame) -> None:
     category_counts = (
         df[df["category_nav"].astype(str).str.strip().ne("")]
-        .groupby("category_nav")
-        .size()
-        .sort_values(ascending=False)
-        .head(12)
+        .groupby("category_nav").size().sort_values(ascending=False).head(12)
     )
-
     if category_counts.empty:
         return
 
     st.markdown('<div class="category-title">Категории</div>', unsafe_allow_html=True)
     cols = st.columns(4)
-
     for idx, (category_name, count) in enumerate(category_counts.items()):
         with cols[idx % 4]:
             if st.button(f"{category_name} ({count})", key=f"cat_shortcut_{idx}", use_container_width=True):
@@ -479,18 +339,13 @@ def render_subcategory_shortcuts(df: pd.DataFrame, selected_category: str) -> No
     pool = df[df["category_nav"] == selected_category]
     subcategory_counts = (
         pool[pool["subcategory_nav"].astype(str).str.strip().ne("")]
-        .groupby("subcategory_nav")
-        .size()
-        .sort_values(ascending=False)
-        .head(16)
+        .groupby("subcategory_nav").size().sort_values(ascending=False).head(16)
     )
-
     if subcategory_counts.empty:
         return
 
     st.markdown("#### Подкатегории")
     cols = st.columns(4)
-
     for idx, (subcategory_name, count) in enumerate(subcategory_counts.items()):
         with cols[idx % 4]:
             if st.button(f"{subcategory_name} ({count})", key=f"subcat_shortcut_{idx}", use_container_width=True):
@@ -501,18 +356,13 @@ def render_subcategory_shortcuts(df: pd.DataFrame, selected_category: str) -> No
 
 def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     st.sidebar.header("Фильтры")
-
     query = st.sidebar.text_input("Поиск", placeholder="Артикул, код, название, бренд, категория")
 
     category_options = sorted([x for x in df["category_nav"].dropna().unique().tolist() if clean_str(x)])
     category_from_query = clean_str(st.query_params.get("category", ""))
     category_index = category_options.index(category_from_query) + 1 if category_from_query in category_options else 0
 
-    selected_category = st.sidebar.selectbox(
-        "Категория",
-        ["Все категории"] + category_options,
-        index=category_index,
-    )
+    selected_category = st.sidebar.selectbox("Категория", ["Все категории"] + category_options, index=category_index)
 
     subcategory_pool = df.copy()
     if selected_category != "Все категории":
@@ -522,11 +372,7 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     subcategory_from_query = clean_str(st.query_params.get("subcategory", ""))
     subcategory_index = subcategory_options.index(subcategory_from_query) + 1 if subcategory_from_query in subcategory_options else 0
 
-    selected_subcategory = st.sidebar.selectbox(
-        "Подкатегория",
-        ["Все подкатегории"] + subcategory_options,
-        index=subcategory_index,
-    )
+    selected_subcategory = st.sidebar.selectbox("Подкатегория", ["Все подкатегории"] + subcategory_options, index=subcategory_index)
 
     if selected_category != "Все категории":
         st.query_params["category"] = selected_category
@@ -538,45 +384,27 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     else:
         st.query_params.pop("subcategory", None)
 
-    selected_brands = st.sidebar.multiselect(
-        "Бренд",
-        sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)]),
-    )
-
+    selected_brands = st.sidebar.multiselect("Бренд", sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)]))
     only_in_stock = st.sidebar.checkbox("Только в наличии")
     only_with_photo = st.sidebar.checkbox("Только с фото", value=True)
 
     min_price = int(df["ozon_price_num"].min()) if not df.empty else 0
     max_price = int(df["ozon_price_num"].max()) if not df.empty else 0
+    price_range = st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price)) if max_price > min_price else (min_price, max_price)
 
-    price_range = (
-        st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price))
-        if max_price > min_price
-        else (min_price, max_price)
-    )
-
-    sort_by = st.sidebar.selectbox(
-        "Сортировка",
-        ["По умолчанию", "Номер: сначала", "Номер: конец", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"],
-    )
+    sort_by = st.sidebar.selectbox("Сортировка", ["По умолчанию", "Номер: сначала", "Номер: конец", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"])
 
     result = df.copy()
-
     if query.strip():
         result = result[result["search_blob"].str.contains(query.lower(), na=False)]
-
     if selected_category != "Все категории":
         result = result[result["category_nav"] == selected_category]
-
     if selected_subcategory != "Все подкатегории":
         result = result[result["subcategory_nav"] == selected_subcategory]
-
     if selected_brands:
         result = result[result["brand_clean"].isin(selected_brands)]
-
     if only_in_stock:
         result = result[result["stock_qty_num"] > 0]
-
     if only_with_photo:
         result = result[result["has_image"]]
 
@@ -599,38 +427,43 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
 
 
 def render_card(row: pd.Series) -> None:
-    with st.container(border=True):
-        st.markdown(f'<div class="num-badge">№ {int(row["catalog_number"])}</div>', unsafe_allow_html=True)
+    image_src = image_to_src(row["primary_image_resolved"])
+    category = html.escape(clean_str(row["category_nav"]) or "—")
+    subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
+    title = html.escape(clean_str(row["title"]))
+    brand = html.escape(clean_str(row["brand"]))
+    offer_id = html.escape(clean_str(row["offer_id"]))
+    code = html.escape(clean_str(row["code"]))
+    stock_text = html.escape(clean_str(row["stock_text"]))
+    badge_class = "badge" if row["stock_qty_num"] > 0 else "badge out"
+    old_price = ""
+    if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
+        old_price = f'<div class="old">{html.escape(format_price(row["retail_price_num"]))}</div>'
 
-        if row["primary_image_resolved"]:
-            st.image(row["primary_image_resolved"], width="stretch")
+    image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
 
-        st.markdown(f'<div class="brand">{row["brand"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="title">{row["title"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="price">{format_price(row["ozon_price_num"])}</div>', unsafe_allow_html=True)
-
-        if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
-            st.markdown(f'<div class="old">{format_price(row["retail_price_num"])}</div>', unsafe_allow_html=True)
-
-        badge_class = "badge" if row["stock_qty_num"] > 0 else "badge out"
-        st.markdown(f'<div class="{badge_class}">{row["stock_text"]}</div>', unsafe_allow_html=True)
-
-        category = clean_str(row["category_nav"]) or "—"
-        subcategory = clean_str(row["subcategory_nav"]) or "—"
-
-        st.markdown(
-            f"""
-            <div class="meta">
-                Категория: {category}<br>
-                Подкатегория: {subcategory}<br>
-                Артикул: {row["offer_id"]}<br>
-                Код: {row["code"]}
+    st.markdown(
+        f"""
+        <a class="product-link" href="?offer_id={offer_id}">
+            <div class="product-card">
+                <div class="num-badge">№ {int(row["catalog_number"])}</div>
+                {image_html}
+                <div class="brand">{brand}</div>
+                <div class="title">{title}</div>
+                <div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>
+                {old_price}
+                <div class="{badge_class}">{stock_text}</div>
+                <div class="meta">
+                    Категория: {category}<br>
+                    Подкатегория: {subcategory}<br>
+                    Артикул: {offer_id}<br>
+                    Код: {code}
+                </div>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(f"[Открыть карточку](?offer_id={row['offer_id']})")
+        </a>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def render_catalog_page(df: pd.DataFrame) -> None:
@@ -642,18 +475,12 @@ def render_catalog_page(df: pd.DataFrame) -> None:
     end = start + PAGE_SIZE
 
     left, mid, right = st.columns([1, 2, 1])
-
     with left:
         if page > 1 and st.button("← Назад", use_container_width=True):
             st.query_params["page"] = str(page - 1)
             st.rerun()
-
     with mid:
-        st.markdown(
-            f"<div style='text-align:center;padding-top:8px;'>Страница {page} из {total_pages}</div>",
-            unsafe_allow_html=True,
-        )
-
+        st.markdown(f"<div style='text-align:center;padding-top:8px;'>Страница {page} из {total_pages}</div>", unsafe_allow_html=True)
     with right:
         if page < total_pages and st.button("Вперёд →", use_container_width=True):
             st.query_params["page"] = str(page + 1)
@@ -661,7 +488,6 @@ def render_catalog_page(df: pd.DataFrame) -> None:
 
     items = df.iloc[start:end]
     cols = st.columns(4)
-
     for idx, (_, row) in enumerate(items.iterrows()):
         with cols[idx % 4]:
             render_card(row)
@@ -669,19 +495,18 @@ def render_catalog_page(df: pd.DataFrame) -> None:
 
 def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     item = df[df["offer_id"].astype(str) == str(offer_id)]
-
     if item.empty:
         st.error("Товар не найден")
         return
 
     row = item.iloc[0]
-
     st.markdown("[← Назад в каталог](./)")
     st.markdown('<div class="detail">', unsafe_allow_html=True)
 
     category = clean_str(row["category_nav"])
     subcategory = clean_str(row["subcategory_nav"])
     ozon_category = clean_str(row["ozon_category_display"])
+    dimensions = format_dimensions(row)
 
     st.markdown(f'<div class="num-badge">№ {int(row["catalog_number"])}</div>', unsafe_allow_html=True)
     st.caption(" / ".join([x for x in [category, subcategory] if x]))
@@ -691,19 +516,15 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
         st.write(row["full_name"])
 
     left, right = st.columns([1.05, 1])
-
     with left:
         if row["primary_image_resolved"]:
             st.image(row["primary_image_resolved"], width="stretch")
 
     with right:
         st.markdown(f"### {format_price(row['ozon_price_num'])}")
-
         if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
             st.markdown(f"Старая цена: {format_price(row['retail_price_num'])}")
-
         st.markdown(f"**Наличие:** {row['stock_text']}")
-
         if clean_str(row["external_url"]):
             st.link_button("Открыть источник", clean_str(row["external_url"]))
 
@@ -716,20 +537,14 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
             ("Код", row["code"]),
             ("Бренд", row["brand"]),
             ("Вес", f"{row['weight']} кг" if clean_str(row["weight"]) else "—"),
-            ("Длина", clean_str(row["length"]) or "—"),
-            ("Ширина", clean_str(row["width"]) or "—"),
-            ("Высота", clean_str(row["height"]) or "—"),
+            ("Габариты Д×Ш×В", dimensions),
             ("ТН ВЭД", clean_str(row["tnved"]) or "—"),
         ]
 
         sc1, sc2 = st.columns(2)
-
         for idx, (label, value) in enumerate(specs):
             with (sc1 if idx % 2 == 0 else sc2):
-                st.markdown(
-                    f'<div class="spec"><div class="spec-label">{label}</div><div class="spec-value">{value}</div></div>',
-                    unsafe_allow_html=True,
-                )
+                st.markdown(f'<div class="spec"><div class="spec-label">{label}</div><div class="spec-value">{value}</div></div>', unsafe_allow_html=True)
 
     if clean_str(row["description"]):
         st.markdown("### Описание")
@@ -741,7 +556,6 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
 def main() -> None:
     st.set_page_config(page_title="Catalog 2000", page_icon="🛒", layout="wide")
     inject_css()
-
     df = load_catalog()
 
     st.markdown(
@@ -755,13 +569,11 @@ def main() -> None:
     )
 
     offer_id = st.query_params.get("offer_id", "")
-
     if offer_id:
         render_product_page(df, offer_id)
         return
 
     filtered, selected_category, selected_subcategory = filter_catalog(df)
-
     render_metrics(filtered)
     render_category_shortcuts(df)
     render_subcategory_shortcuts(df, selected_category)
