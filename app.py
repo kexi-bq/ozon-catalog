@@ -28,9 +28,11 @@ def clean_float(value: Any) -> float | None:
         return None
     if isinstance(value, float) and pd.isna(value):
         return None
+
     text = str(value).strip()
     if not text:
         return None
+
     text = (
         text.replace("\u00a0", "")
         .replace("₽", "")
@@ -39,6 +41,7 @@ def clean_float(value: Any) -> float | None:
         .replace(" ", "")
         .replace(",", ".")
     )
+
     try:
         return float(text)
     except Exception:
@@ -84,7 +87,7 @@ def resolve_image(value: Any) -> str:
     return ""
 
 
-def get_col(df: pd.DataFrame, name: str, default: str = "") -> pd.Series:
+def get_col(df: pd.DataFrame, name: str, default: Any = "") -> pd.Series:
     if name in df.columns:
         return df[name]
     return pd.Series([default] * len(df), index=df.index)
@@ -94,19 +97,28 @@ def get_col(df: pd.DataFrame, name: str, default: str = "") -> pd.Series:
 def load_catalog() -> pd.DataFrame:
     df = pd.read_excel(DATA_PATH, dtype=object)
 
-    # Базовые поля
-    df["offer_id"] = get_col(df, "offer_id", get_col(df, "sku", "")).map(clean_str)
-    df["code"] = get_col(df, "code", get_col(df, "code_1c", "")).map(clean_str)
-    df["title"] = get_col(df, "title", get_col(df, "name", "")).map(clean_str)
-    df["full_name"] = get_col(df, "full_name", get_col(df, "name", "")).map(clean_str)
+    df["offer_id"] = get_col(df, "offer_id", "").map(clean_str)
+    if df["offer_id"].eq("").all() and "sku" in df.columns:
+        df["offer_id"] = df["sku"].map(clean_str)
+
+    df["code"] = get_col(df, "code", "").map(clean_str)
+    if df["code"].eq("").all() and "code_1c" in df.columns:
+        df["code"] = df["code_1c"].map(clean_str)
+
+    df["title"] = get_col(df, "title", "").map(clean_str)
+    if df["title"].eq("").all() and "name" in df.columns:
+        df["title"] = df["name"].map(clean_str)
+
+    df["full_name"] = get_col(df, "full_name", "").map(clean_str)
+    if df["full_name"].eq("").all() and "name" in df.columns:
+        df["full_name"] = df["name"].map(clean_str)
+
     df["brand"] = get_col(df, "brand", "").map(clean_str)
     df["brand_clean"] = df["brand"].map(clean_str)
 
-    # НОРМАЛЬНЫЕ категории для сайта
     df["category_nav"] = get_col(df, "local_category_1", "").map(clean_str)
     df["subcategory_nav"] = get_col(df, "local_category_2", "").map(clean_str)
 
-    # Ozon-категория отдельно, только как справка
     if "ozon_category_name" in df.columns:
         df["ozon_category_display"] = df["ozon_category_name"].map(clean_str)
     elif "aggr_final_category" in df.columns:
@@ -116,27 +128,45 @@ def load_catalog() -> pd.DataFrame:
     else:
         df["ozon_category_display"] = ""
 
-    # Группа — больше НЕ используем как категорию
     df["group_name_clean"] = get_col(df, "group_name", "").map(clean_str)
 
-    df["retail_price_num"] = get_col(df, "retail_price", get_col(df, "price", 0)).map(clean_float).fillna(0.0)
-    df["ozon_price_num"] = get_col(df, "ozon_price", get_col(df, "price", 0)).map(clean_float).fillna(df["retail_price_num"])
-    df["stock_qty_num"] = get_col(df, "stock_qty", get_col(df, "stock", 0)).map(clean_float).fillna(0)
+    df["retail_price_num"] = get_col(df, "retail_price", 0).map(clean_float).fillna(0.0)
+    if df["retail_price_num"].eq(0).all() and "price" in df.columns:
+        df["retail_price_num"] = df["price"].map(clean_float).fillna(0.0)
+
+    df["ozon_price_num"] = get_col(df, "ozon_price", 0).map(clean_float).fillna(df["retail_price_num"])
+    if df["ozon_price_num"].eq(0).all() and "price" in df.columns:
+        df["ozon_price_num"] = df["price"].map(clean_float).fillna(df["retail_price_num"])
+
+    df["stock_qty_num"] = get_col(df, "stock_qty", 0).map(clean_float).fillna(0)
+    if df["stock_qty_num"].eq(0).all() and "stock" in df.columns:
+        df["stock_qty_num"] = df["stock"].map(clean_float).fillna(0)
 
     image_col = "primary_image" if "primary_image" in df.columns else "main_image"
     df["primary_image"] = get_col(df, image_col, "").map(clean_str)
     df["primary_image_resolved"] = df["primary_image"].map(resolve_image)
     df["has_image"] = df["primary_image_resolved"].astype(str).str.strip().ne("")
 
-    df["stock_text"] = df["stock_qty_num"].apply(lambda x: f"В наличии: {int(x)}" if x > 0 else "Нет в наличии")
+    df["stock_text"] = df["stock_qty_num"].apply(
+        lambda x: f"В наличии: {int(x)}" if x > 0 else "Нет в наличии"
+    )
 
     df["weight"] = get_col(df, "weight", "").map(clean_str)
     df["length"] = get_col(df, "length", "").map(clean_str)
     df["width"] = get_col(df, "width", "").map(clean_str)
     df["height"] = get_col(df, "height", "").map(clean_str)
-    df["tnved"] = get_col(df, "tnved", get_col(df, "aggr_final_tnved", "")).map(clean_str)
+
+    if "tnved" in df.columns:
+        df["tnved"] = df["tnved"].map(clean_str)
+    elif "aggr_final_tnved" in df.columns:
+        df["tnved"] = df["aggr_final_tnved"].map(clean_str)
+    else:
+        df["tnved"] = ""
+
     df["description"] = get_col(df, "description", "").map(clean_str)
-    df["external_url"] = get_col(df, "external_url", get_col(df, "source_url", "")).map(clean_str)
+    df["external_url"] = get_col(df, "external_url", "").map(clean_str)
+    if df["external_url"].eq("").all() and "source_url" in df.columns:
+        df["external_url"] = df["source_url"].map(clean_str)
 
     df["search_blob"] = (
         df["offer_id"].fillna("").astype(str)
@@ -156,7 +186,14 @@ def load_catalog() -> pd.DataFrame:
         + df["ozon_category_display"].fillna("").astype(str)
     ).str.lower()
 
-    return df.sort_values(["category_nav", "subcategory_nav", "brand", "title", "offer_id"], kind="stable").reset_index(drop=True)
+    df = df.sort_values(
+        ["category_nav", "subcategory_nav", "brand", "title", "offer_id"],
+        kind="stable",
+    ).reset_index(drop=True)
+
+    df["catalog_number"] = range(1, len(df) + 1)
+
+    return df
 
 
 def format_price(value: float | int | None) -> str:
@@ -169,8 +206,15 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
-        .stApp { background: #f4f7fb; }
-        .block-container { max-width: 1380px; padding-top: 1rem; padding-bottom: 2rem; }
+        .stApp {
+            background: #f4f7fb;
+        }
+
+        .block-container {
+            max-width: 1380px;
+            padding-top: 1rem;
+            padding-bottom: 2rem;
+        }
 
         .topbar {
             background: linear-gradient(135deg, #005bff 0%, #2b7cff 60%, #8cb6ff 100%);
@@ -180,8 +224,17 @@ def inject_css() -> None:
             margin-bottom: 18px;
         }
 
-        .topbar h1 { margin: 0; font-size: 34px; font-weight: 800; }
-        .topbar p { margin: 8px 0 0 0; font-size: 14px; color: rgba(255,255,255,.9); }
+        .topbar h1 {
+            margin: 0;
+            font-size: 34px;
+            font-weight: 800;
+        }
+
+        .topbar p {
+            margin: 8px 0 0 0;
+            font-size: 14px;
+            color: rgba(255,255,255,.9);
+        }
 
         .metric {
             background: white;
@@ -190,8 +243,17 @@ def inject_css() -> None:
             padding: 16px 18px;
         }
 
-        .metric-label { color: #607087; font-size: 12px; margin-bottom: 6px; }
-        .metric-value { color: #1f2d3d; font-size: 24px; font-weight: 800; }
+        .metric-label {
+            color: #607087;
+            font-size: 12px;
+            margin-bottom: 6px;
+        }
+
+        .metric-value {
+            color: #1f2d3d;
+            font-size: 24px;
+            font-weight: 800;
+        }
 
         .category-title {
             font-size: 24px;
@@ -201,10 +263,46 @@ def inject_css() -> None:
             color: #1f2d3d;
         }
 
-        .brand { font-size: 11px; color: #005bff; font-weight: 700; text-transform: uppercase; }
-        .title { font-size: 15px; line-height: 1.35; font-weight: 700; color: #162033; min-height: 62px; margin: 8px 0 10px 0; }
-        .price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
-        .old { font-size: 13px; color: #8a97a8; text-decoration: line-through; }
+        .num-badge {
+            display: inline-block;
+            background: #eef4ff;
+            color: #005bff;
+            border: 1px solid #cfe0ff;
+            border-radius: 999px;
+            padding: 4px 9px;
+            font-size: 12px;
+            font-weight: 800;
+            margin-bottom: 8px;
+        }
+
+        .brand {
+            font-size: 11px;
+            color: #005bff;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+
+        .title {
+            font-size: 15px;
+            line-height: 1.35;
+            font-weight: 700;
+            color: #162033;
+            min-height: 62px;
+            margin: 8px 0 10px 0;
+        }
+
+        .price {
+            font-size: 26px;
+            font-weight: 800;
+            color: #f91155;
+            margin: 8px 0 2px 0;
+        }
+
+        .old {
+            font-size: 13px;
+            color: #8a97a8;
+            text-decoration: line-through;
+        }
 
         .meta {
             font-size: 12px;
@@ -224,7 +322,10 @@ def inject_css() -> None:
             color: #138a43;
         }
 
-        .badge.out { background: #fff2e2; color: #a45d00; }
+        .badge.out {
+            background: #fff2e2;
+            color: #a45d00;
+        }
 
         .detail {
             background: white;
@@ -241,8 +342,89 @@ def inject_css() -> None:
             margin-bottom: 10px;
         }
 
-        .spec-label { font-size: 12px; color: #718198; margin-bottom: 4px; }
-        .spec-value { font-size: 15px; color: #18253a; font-weight: 600; }
+        .spec-label {
+            font-size: 12px;
+            color: #718198;
+            margin-bottom: 4px;
+        }
+
+        .spec-value {
+            font-size: 15px;
+            color: #18253a;
+            font-weight: 600;
+            word-break: break-word;
+        }
+
+        div[data-testid="stButton"] button {
+            border-radius: 14px;
+            min-height: 42px;
+            white-space: normal;
+        }
+
+        img {
+            border-radius: 14px;
+        }
+
+        @media (max-width: 768px) {
+            .block-container {
+                padding-left: 0.7rem;
+                padding-right: 0.7rem;
+                padding-top: 0.6rem;
+            }
+
+            .topbar {
+                border-radius: 18px;
+                padding: 16px 16px;
+                margin-bottom: 12px;
+            }
+
+            .topbar h1 {
+                font-size: 25px;
+                line-height: 1.15;
+            }
+
+            .topbar p {
+                font-size: 12px;
+                line-height: 1.35;
+            }
+
+            .metric {
+                padding: 12px 13px;
+                border-radius: 14px;
+            }
+
+            .metric-value {
+                font-size: 20px;
+            }
+
+            .category-title {
+                font-size: 20px;
+            }
+
+            .title {
+                min-height: auto;
+                font-size: 15px;
+            }
+
+            .price {
+                font-size: 24px;
+            }
+
+            .detail {
+                padding: 16px;
+                border-radius: 18px;
+            }
+
+            div[data-testid="column"] {
+                width: 100% !important;
+                flex: 1 1 100% !important;
+                min-width: 100% !important;
+            }
+
+            div[data-testid="stHorizontalBlock"] {
+                gap: 0.55rem;
+            }
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -257,6 +439,7 @@ def render_metrics(df: pd.DataFrame) -> None:
         ("Брендов", f"{int(df['brand_clean'].nunique()):,}".replace(",", " ")),
         ("Средняя цена", format_price(df["ozon_price_num"].mean() if not df.empty else 0)),
     ]
+
     for col, (label, value) in zip((c1, c2, c3, c4), values):
         with col:
             st.markdown(
@@ -355,17 +538,26 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     else:
         st.query_params.pop("subcategory", None)
 
-    selected_brands = st.sidebar.multiselect("Бренд", sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)]))
+    selected_brands = st.sidebar.multiselect(
+        "Бренд",
+        sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)]),
+    )
+
     only_in_stock = st.sidebar.checkbox("Только в наличии")
     only_with_photo = st.sidebar.checkbox("Только с фото", value=True)
 
     min_price = int(df["ozon_price_num"].min()) if not df.empty else 0
     max_price = int(df["ozon_price_num"].max()) if not df.empty else 0
-    price_range = st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price)) if max_price > min_price else (min_price, max_price)
+
+    price_range = (
+        st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price))
+        if max_price > min_price
+        else (min_price, max_price)
+    )
 
     sort_by = st.sidebar.selectbox(
         "Сортировка",
-        ["По умолчанию", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"],
+        ["По умолчанию", "Номер: сначала", "Номер: конец", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"],
     )
 
     result = df.copy()
@@ -390,7 +582,11 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
 
     result = result[(result["ozon_price_num"] >= price_range[0]) & (result["ozon_price_num"] <= price_range[1])]
 
-    if sort_by == "Цена: ниже":
+    if sort_by == "Номер: сначала":
+        result = result.sort_values(["catalog_number"], kind="stable")
+    elif sort_by == "Номер: конец":
+        result = result.sort_values(["catalog_number"], ascending=False, kind="stable")
+    elif sort_by == "Цена: ниже":
         result = result.sort_values(["ozon_price_num", "title"], kind="stable")
     elif sort_by == "Цена: выше":
         result = result.sort_values(["ozon_price_num", "title"], ascending=[False, True], kind="stable")
@@ -404,6 +600,8 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
 
 def render_card(row: pd.Series) -> None:
     with st.container(border=True):
+        st.markdown(f'<div class="num-badge">№ {int(row["catalog_number"])}</div>', unsafe_allow_html=True)
+
         if row["primary_image_resolved"]:
             st.image(row["primary_image_resolved"], width="stretch")
 
@@ -446,7 +644,7 @@ def render_catalog_page(df: pd.DataFrame) -> None:
     left, mid, right = st.columns([1, 2, 1])
 
     with left:
-        if page > 1 and st.button("← Назад"):
+        if page > 1 and st.button("← Назад", use_container_width=True):
             st.query_params["page"] = str(page - 1)
             st.rerun()
 
@@ -457,7 +655,7 @@ def render_catalog_page(df: pd.DataFrame) -> None:
         )
 
     with right:
-        if page < total_pages and st.button("Вперёд →"):
+        if page < total_pages and st.button("Вперёд →", use_container_width=True):
             st.query_params["page"] = str(page + 1)
             st.rerun()
 
@@ -485,6 +683,7 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     subcategory = clean_str(row["subcategory_nav"])
     ozon_category = clean_str(row["ozon_category_display"])
 
+    st.markdown(f'<div class="num-badge">№ {int(row["catalog_number"])}</div>', unsafe_allow_html=True)
     st.caption(" / ".join([x for x in [category, subcategory] if x]))
     st.title(row["title"])
 
@@ -509,6 +708,7 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
             st.link_button("Открыть источник", clean_str(row["external_url"]))
 
         specs = [
+            ("Порядковый номер", int(row["catalog_number"])),
             ("Категория", category or "—"),
             ("Подкатегория", subcategory or "—"),
             ("Ozon-категория", ozon_category or "—"),
@@ -548,7 +748,7 @@ def main() -> None:
         """
         <div class="topbar">
             <h1>Catalog 2000</h1>
-            <p>Витрина: 2000 не метражных товаров с фото, категориями и подкатегориями.</p>
+            <p>Витрина: 2000 не метражных товаров с фото, категориями, подкатегориями и порядковыми номерами.</p>
         </div>
         """,
         unsafe_allow_html=True,
