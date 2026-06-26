@@ -251,17 +251,6 @@ def inject_css() -> None:
         .product-card:hover {
             transform: translateY(-2px); box-shadow: 0 10px 26px rgba(15, 35, 80, .12); border-color: #8cb6ff;
         }
-        .catalog-grid {
-            display: grid;
-            grid-template-columns: repeat(4, minmax(0, 1fr));
-            gap: 1rem;
-            align-items: stretch;
-        }
-
-        .catalog-grid .product-link {
-            height: 100%;
-        }
-
         .product-image {
             width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fbff;
             border-radius: 14px; display: block; margin-bottom: 10px;
@@ -290,14 +279,6 @@ def inject_css() -> None:
         div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
         img { border-radius: 14px; }
 
-        @media (max-width: 1100px) {
-            .catalog-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-        }
-
-        @media (max-width: 900px) {
-            .catalog-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-        }
-
         @media (max-width: 768px) {
             .block-container { padding-left: .7rem; padding-right: .7rem; padding-top: .6rem; }
             .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
@@ -310,7 +291,7 @@ def inject_css() -> None:
             .price { font-size: 24px; }
             .detail { padding: 16px; border-radius: 18px; }
             .product-card { padding: 10px; border-radius: 16px; }
-            .catalog-grid { grid-template-columns: 1fr; gap: .75rem; }
+            div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
             div[data-testid="stHorizontalBlock"] { gap: .55rem; }
         }
         </style>
@@ -445,7 +426,7 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     return result.reset_index(drop=True), selected_category, selected_subcategory
 
 
-def build_card_html(row: pd.Series) -> str:
+def render_card(row: pd.Series) -> None:
     image_src = image_to_src(row["primary_image_resolved"])
     category = html.escape(clean_str(row["category_nav"]) or "—")
     subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
@@ -462,7 +443,8 @@ def build_card_html(row: pd.Series) -> str:
 
     image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
 
-    return f"""
+    st.markdown(
+        f"""
         <a class="product-link" href="?offer_id={offer_id}" target="_self">
             <div class="product-card">
                 <div class="num-badge">№ {int(row["catalog_number"])}</div>
@@ -480,11 +462,10 @@ def build_card_html(row: pd.Series) -> str:
                 </div>
             </div>
         </a>
-    """
+        """,
+        unsafe_allow_html=True,
+    )
 
-
-def render_card(row: pd.Series) -> None:
-    st.markdown(build_card_html(row), unsafe_allow_html=True)
 
 def render_catalog_page(df: pd.DataFrame) -> None:
     total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
@@ -500,20 +481,27 @@ def render_catalog_page(df: pd.DataFrame) -> None:
             st.query_params["page"] = str(page - 1)
             st.rerun()
     with mid:
-        st.markdown(f"<div style='text-align:center;padding-top:8px;'>Страница {page} из {total_pages}</div>", unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='text-align:center;padding-top:8px;'>Страница {page} из {total_pages}</div>",
+            unsafe_allow_html=True,
+        )
     with right:
         if page < total_pages and st.button("Вперёд →", use_container_width=True):
             st.query_params["page"] = str(page + 1)
             st.rerun()
 
-    items = df.iloc[start:end]
+    items = list(df.iloc[start:end].iterrows())
 
-    # Важно: не используем st.columns для карточек.
-    # На телефоне Streamlit колонки складывает вертикально по колонкам,
-    # из-за этого номера шли 1,5,9... Вместо этого отрисовываем одну CSS-grid
-    # сетку: порядок в HTML остается 1,2,3,4... при любой ширине экрана.
-    cards_html = "\n".join(build_card_html(row) for _, row in items.iterrows())
-    st.markdown(f'<div class="catalog-grid">{cards_html}</div>', unsafe_allow_html=True)
+    # Важно: рисуем карточки СТРОКАМИ по 4 штуки, а не одной колонкой через idx % 4.
+    # Тогда на широком экране порядок: 1 2 3 4 / 5 6 7 8.
+    # На вертикальном телефоне Streamlit сложит колонки сверху вниз: 1,2,3,4,5,6...
+    # Старый вариант давал на телефоне 1,5,9... из-за вертикального заполнения колонок.
+    for row_start in range(0, len(items), 4):
+        cols = st.columns(4)
+        for col, (_, row) in zip(cols, items[row_start:row_start + 4]):
+            with col:
+                render_card(row)
+
 
 def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     item = df[df["offer_id"].astype(str) == str(offer_id)]
