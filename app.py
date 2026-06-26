@@ -279,20 +279,58 @@ def inject_css() -> None:
         div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
         img { border-radius: 14px; }
 
+        *, *::before, *::after { box-sizing: border-box; }
+        html, body, .stApp { overflow-x: hidden; }
+
         @media (max-width: 768px) {
-            .block-container { padding-left: .7rem; padding-right: .7rem; padding-top: .6rem; }
+            .block-container {
+                padding-left: 12px !important;
+                padding-right: 12px !important;
+                padding-top: .6rem;
+                max-width: 100% !important;
+            }
             .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
             .topbar h1 { font-size: 25px; line-height: 1.15; }
             .topbar p { font-size: 12px; line-height: 1.35; }
             .metric { padding: 12px 13px; border-radius: 14px; }
             .metric-value { font-size: 20px; }
             .category-title { font-size: 20px; }
-            .title { min-height: auto; font-size: 15px; }
-            .price { font-size: 24px; }
+            .title { min-height: auto; font-size: 14px; }
+            .price { font-size: 22px; }
             .detail { padding: 16px; border-radius: 18px; }
-            .product-card { padding: 10px; border-radius: 16px; }
-            div[data-testid="column"] { width: 100% !important; flex: 1 1 100% !important; min-width: 100% !important; }
-            div[data-testid="stHorizontalBlock"] { gap: .55rem; }
+            .product-card {
+                width: 100%;
+                max-width: 100%;
+                padding: 10px;
+                border-radius: 14px;
+                overflow: hidden;
+            }
+            .product-link { width: 100%; max-width: 100%; }
+            .product-image { max-width: 100%; height: auto; }
+            .meta, .title, .brand, .spec-value { overflow-wrap: anywhere; word-break: break-word; }
+            div[data-testid="stHorizontalBlock"] {
+                flex-wrap: wrap !important;
+                gap: .6rem !important;
+            }
+            div[data-testid="column"] {
+                width: auto !important;
+                min-width: calc(50% - .3rem) !important;
+                flex: 1 1 calc(50% - .3rem) !important;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .block-container {
+                padding-left: 10px !important;
+                padding-right: 10px !important;
+            }
+            div[data-testid="column"] {
+                width: 100% !important;
+                min-width: 100% !important;
+                flex: 1 1 100% !important;
+            }
+            .topbar h1 { font-size: 23px; }
+            .price { font-size: 21px; }
         }
         </style>
         """,
