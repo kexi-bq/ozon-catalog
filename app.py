@@ -505,17 +505,10 @@ def render_card(row: pd.Series) -> None:
     )
 
 
-def render_catalog_page(df: pd.DataFrame) -> None:
-    total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
-    page = int(st.query_params.get("page", "1"))
-    page = max(1, min(page, total_pages))
-
-    start = (page - 1) * PAGE_SIZE
-    end = start + PAGE_SIZE
-
+def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
     left, mid, right = st.columns([1, 2, 1])
     with left:
-        if page > 1 and st.button("← Назад", use_container_width=True):
+        if page > 1 and st.button("← Назад", key=f"{key_prefix}_prev", use_container_width=True):
             st.query_params["page"] = str(page - 1)
             st.rerun()
     with mid:
@@ -524,9 +517,20 @@ def render_catalog_page(df: pd.DataFrame) -> None:
             unsafe_allow_html=True,
         )
     with right:
-        if page < total_pages and st.button("Вперёд →", use_container_width=True):
+        if page < total_pages and st.button("Вперёд →", key=f"{key_prefix}_next", use_container_width=True):
             st.query_params["page"] = str(page + 1)
             st.rerun()
+
+
+def render_catalog_page(df: pd.DataFrame) -> None:
+    total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
+    page = int(st.query_params.get("page", "1"))
+    page = max(1, min(page, total_pages))
+
+    start = (page - 1) * PAGE_SIZE
+    end = start + PAGE_SIZE
+
+    render_pagination(page, total_pages, "top")
 
     items = list(df.iloc[start:end].iterrows())
 
@@ -539,6 +543,10 @@ def render_catalog_page(df: pd.DataFrame) -> None:
         for col, (_, row) in zip(cols, items[row_start:row_start + 4]):
             with col:
                 render_card(row)
+
+    if total_pages > 1:
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+        render_pagination(page, total_pages, "bottom")
 
 
 def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
