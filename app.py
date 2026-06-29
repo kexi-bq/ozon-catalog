@@ -14,7 +14,7 @@ import streamlit as st
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
 DATA_PATH = APP_DIR / "data" / "catalog_2000.xlsx"
-PAGE_SIZE = 24
+PAGE_SIZE = 25
 
 
 def clean_str(value: Any) -> str:
@@ -131,6 +131,27 @@ def load_catalog() -> pd.DataFrame:
     df["category_nav"] = get_col(df, "local_category_1", "").map(clean_str)
     df["subcategory_nav"] = get_col(df, "local_category_2", "").map(clean_str)
 
+    df["group_name"] = get_col(df, "group_name", "").map(clean_str)
+    if df["group_name"].eq("").all():
+        for group_col in ["Группа", "group", "ready_source_group"]:
+            if group_col in df.columns:
+                df["group_name"] = df[group_col].map(clean_str)
+                break
+
+    df["material"] = get_col(df, "material", "").map(clean_str)
+    if df["material"].eq("").all():
+        for material_col in ["Материал", "supplier_recomputed_material"]:
+            if material_col in df.columns:
+                df["material"] = df[material_col].map(clean_str)
+                break
+
+    df["color"] = get_col(df, "color", "").map(clean_str)
+    if df["color"].eq("").all():
+        for color_col in ["Цвет", "supplier_recomputed_color"]:
+            if color_col in df.columns:
+                df["color"] = df[color_col].map(clean_str)
+                break
+
     if "ozon_category_name" in df.columns:
         df["ozon_category_display"] = df["ozon_category_name"].map(clean_str)
     elif "aggr_final_category" in df.columns:
@@ -194,6 +215,8 @@ def load_catalog() -> pd.DataFrame:
         + df["subcategory_nav"].fillna("").astype(str)
         + " "
         + df["ozon_category_display"].fillna("").astype(str)
+        + " "
+        + df["group_name"].fillna("").astype(str)
     ).str.lower()
 
     df = df.sort_values(
@@ -264,6 +287,16 @@ def inject_css() -> None:
         .price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
         .old { font-size: 13px; color: #8a97a8; text-decoration: line-through; }
         .meta { font-size: 12px; color: #607087; line-height: 1.55; margin-top: 10px; }
+        .full-info {
+            border-top: 1px solid #edf2f8; margin-top: 12px; padding-top: 10px;
+            font-size: 12px; color: #41536b; line-height: 1.55; overflow-wrap: anywhere; word-break: break-word;
+        }
+        .full-info-row { margin-bottom: 5px; }
+        .full-info-label { color: #718198; font-weight: 700; }
+        .full-description {
+            margin-top: 8px; padding: 9px 10px; border-radius: 12px; background: #f8fbff;
+            color: #304057; white-space: pre-wrap;
+        }
 
         .badge {
             display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
@@ -464,7 +497,18 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     return result.reset_index(drop=True), selected_category, selected_subcategory
 
 
-def render_card(row: pd.Series) -> None:
+def card_info_row(label: str, value: Any) -> str:
+    text = clean_str(value)
+    if not text:
+        return ""
+    return (
+        '<div class="full-info-row">'
+        f'<span class="full-info-label">{html.escape(label)}:</span> {html.escape(text)}'
+        "</div>"
+    )
+
+
+def render_card(row: pd.Series, show_full: bool = False) -> None:
     image_src = image_to_src(row["primary_image_resolved"])
     category = html.escape(clean_str(row["category_nav"]) or "—")
     subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
@@ -472,32 +516,51 @@ def render_card(row: pd.Series) -> None:
     brand = html.escape(clean_str(row["brand"]))
     offer_id = html.escape(clean_str(row["offer_id"]))
     code = html.escape(clean_str(row["code"]))
-    stock_text = html.escape(clean_str(row["stock_text"]))
-    badge_class = "badge" if row["stock_qty_num"] > 0 else "badge out"
+    display_number = int(row.get("display_number", row["catalog_number"]))
 
     old_price = ""
     if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
         old_price = f'<div class="old">{html.escape(format_price(row["retail_price_num"]))}</div>'
 
     image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
+    full_info = ""
+    if show_full:
+        dimensions = format_dimensions(row)
+        weight = f'{clean_str(row["weight"])} кг' if clean_str(row["weight"]) else ""
+        full_rows = [
+            card_info_row("Полное наименование", row["full_name"]),
+            card_info_row("Группа", row["group_name"]),
+            card_info_row("Ozon-категория", row["ozon_category_display"]),
+            card_info_row("Вес", weight),
+            card_info_row("Габариты Д×Ш×В", dimensions if dimensions != "—" else ""),
+            card_info_row("ТН ВЭД", row["tnved"]),
+            card_info_row("Материал", row["material"]),
+            card_info_row("Цвет", row["color"]),
+            card_info_row("Источник", row["external_url"]),
+        ]
+        description = clean_str(row["description"])
+        description_html = (
+            f'<div class="full-description">{html.escape(description)}</div>' if description else ""
+        )
+        full_info = f'<div class="full-info">{"".join(full_rows)}{description_html}</div>'
 
     st.markdown(
         f"""
         <a class="product-link" href="?offer_id={offer_id}" target="_self">
             <div class="product-card">
-                <div class="num-badge">№ {int(row["catalog_number"])}</div>
+                <div class="num-badge">№ {display_number}</div>
                 {image_html}
                 <div class="brand">{brand}</div>
                 <div class="title">{title}</div>
                 <div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>
                 {old_price}
-                <div class="{badge_class}">{stock_text}</div>
                 <div class="meta">
                     Категория: {category}<br>
                     Подкатегория: {subcategory}<br>
                     Артикул: {offer_id}<br>
                     Код: {code}
                 </div>
+                {full_info}
             </div>
         </a>
         """,
@@ -523,12 +586,19 @@ def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
 
 
 def render_catalog_page(df: pd.DataFrame) -> None:
+    df = df.copy().reset_index(drop=True)
+    df["display_number"] = range(1, len(df) + 1)
+
     total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
     page = int(st.query_params.get("page", "1"))
     page = max(1, min(page, total_pages))
 
     start = (page - 1) * PAGE_SIZE
     end = start + PAGE_SIZE
+
+    _, toggle_col = st.columns([3, 1])
+    with toggle_col:
+        show_full_cards = st.checkbox("Вся инфа в карточках", value=False, key="show_full_cards")
 
     render_pagination(page, total_pages, "top")
 
@@ -542,7 +612,7 @@ def render_catalog_page(df: pd.DataFrame) -> None:
         cols = st.columns(4)
         for col, (_, row) in zip(cols, items[row_start:row_start + 4]):
             with col:
-                render_card(row)
+                render_card(row, show_full=show_full_cards)
 
     if total_pages > 1:
         st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
