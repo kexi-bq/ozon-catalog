@@ -9,6 +9,7 @@ from typing import Any
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 
 APP_DIR = Path(__file__).resolve().parent
@@ -572,6 +573,7 @@ def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
     left, mid, right = st.columns([1, 2, 1])
     with left:
         if page > 1 and st.button("← Назад", key=f"{key_prefix}_prev", use_container_width=True):
+            st.session_state["scroll_to_catalog_top"] = True
             st.query_params["page"] = str(page - 1)
             st.rerun()
     with mid:
@@ -581,6 +583,7 @@ def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
         )
     with right:
         if page < total_pages and st.button("Вперёд →", key=f"{key_prefix}_next", use_container_width=True):
+            st.session_state["scroll_to_catalog_top"] = True
             st.query_params["page"] = str(page + 1)
             st.rerun()
 
@@ -599,6 +602,20 @@ def render_catalog_page(df: pd.DataFrame) -> None:
     _, toggle_col = st.columns([3, 1])
     with toggle_col:
         show_full_cards = st.checkbox("Вся инфа в карточках", value=False, key="show_full_cards")
+
+    st.markdown('<div id="catalog-top-anchor"></div>', unsafe_allow_html=True)
+    if st.session_state.pop("scroll_to_catalog_top", False):
+        components.html(
+            """
+            <script>
+            const anchor = window.parent.document.getElementById("catalog-top-anchor");
+            if (anchor) {
+                anchor.scrollIntoView({behavior: "auto", block: "start"});
+            }
+            </script>
+            """,
+            height=0,
+        )
 
     render_pagination(page, total_pages, "top")
 
