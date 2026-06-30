@@ -245,6 +245,20 @@ def format_dimensions(row: pd.Series) -> str:
     return "—"
 
 
+def format_weight(value: Any) -> str:
+    weight = clean_float(value)
+    if weight is None or weight <= 0:
+        return "—"
+    if weight >= 1000:
+        kg = weight / 1000
+        kg_text = f"{kg:.2f}".rstrip("0").rstrip(".")
+        gram_text = f"{int(round(weight)):,}".replace(",", " ")
+        return f"{kg_text} кг / {gram_text} г"
+    if weight == int(weight):
+        return f"{int(weight)} г"
+    return f"{weight:g} г"
+
+
 def inject_css() -> None:
     st.markdown(
         """
@@ -527,12 +541,12 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
     full_info = ""
     if show_full:
         dimensions = format_dimensions(row)
-        weight = f'{clean_str(row["weight"])} кг' if clean_str(row["weight"]) else ""
+        weight = format_weight(row["weight"])
         full_rows = [
             card_info_row("Полное наименование", row["full_name"]),
             card_info_row("Группа", row["group_name"]),
             card_info_row("Ozon-категория", row["ozon_category_display"]),
-            card_info_row("Вес", weight),
+            card_info_row("Вес", weight if weight != "—" else ""),
             card_info_row("Габариты Д×Ш×В", dimensions if dimensions != "—" else ""),
             card_info_row("ТН ВЭД", row["tnved"]),
             card_info_row("Материал", row["material"]),
@@ -679,7 +693,7 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
             ("Артикул", row["offer_id"]),
             ("Код", row["code"]),
             ("Бренд", row["brand"]),
-            ("Вес", f"{row['weight']} кг" if clean_str(row["weight"]) else "—"),
+            ("Вес", format_weight(row["weight"])),
             ("Габариты Д×Ш×В", dimensions),
             ("ТН ВЭД", clean_str(row["tnved"]) or "—"),
         ]
