@@ -14,7 +14,7 @@ import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
-DATA_PATH = APP_DIR / "data" / "catalog_2000.xlsx"
+DATA_PATH = APP_DIR / "data" / "catalog_500_exact_match.xlsx"
 PAGE_SIZE = 25
 
 
@@ -714,15 +714,15 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
 
 
 def main() -> None:
-    st.set_page_config(page_title="Catalog 2000", page_icon="🛒", layout="wide")
+    st.set_page_config(page_title="Catalog 500 Exact", page_icon="🛒", layout="wide")
     inject_css()
     df = load_catalog()
 
     st.markdown(
         """
         <div class="topbar">
-            <h1>Catalog 2000</h1>
-            <p>Витрина: 2000 не метражных товаров с фото, категориями, подкатегориями и порядковыми номерами.</p>
+            <h1>Catalog 500 Exact</h1>
+            <p>Витрина: 500 не метражных товаров с точным совпадением по артикулу/коду, фото, категориями и supplier-ценами.</p>
         </div>
         """,
         unsafe_allow_html=True,
