@@ -185,6 +185,8 @@ def load_catalog() -> pd.DataFrame:
     )
 
     df["weight"] = get_col(df, "weight", "").map(clean_str)
+    df["source_weight_text"] = get_col(df, "source_weight_text", "").map(clean_str)
+    df["source_dimensions_text"] = get_col(df, "source_dimensions_text", "").map(clean_str)
     df["length"] = get_col(df, "length", "").map(clean_str)
     df["width"] = get_col(df, "width", "").map(clean_str)
     df["height"] = get_col(df, "height", "").map(clean_str)
@@ -237,6 +239,9 @@ def format_price(value: float | int | None) -> str:
 
 
 def format_dimensions(row: pd.Series) -> str:
+    source_dimensions = clean_str(row.get("source_dimensions_text"))
+    if source_dimensions:
+        return source_dimensions
     length = clean_str(row["length"])
     width = clean_str(row["width"])
     height = clean_str(row["height"])
@@ -258,6 +263,13 @@ def format_weight(value: Any) -> str:
     if weight == int(weight):
         return f"{int(weight)} г"
     return f"{weight:g} г"
+
+
+def format_row_weight(row: pd.Series) -> str:
+    source_weight = clean_str(row.get("source_weight_text"))
+    if source_weight:
+        return source_weight
+    return format_weight(row["weight"])
 
 
 def inject_css() -> None:
@@ -542,7 +554,7 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
     full_info = ""
     if show_full:
         dimensions = format_dimensions(row)
-        weight = format_weight(row["weight"])
+        weight = format_row_weight(row)
         full_rows = [
             card_info_row("Полное наименование", row["full_name"]),
             card_info_row("Группа", row["group_name"]),
@@ -696,7 +708,7 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
             ("Артикул", row["offer_id"]),
             ("Код", row["code"]),
             ("Бренд", row["brand"]),
-            ("Вес", format_weight(row["weight"])),
+            ("Вес", format_row_weight(row)),
             ("Габариты Д×Ш×В", dimensions),
             ("ТН ВЭД", clean_str(row["tnved"]) or "—"),
         ]
