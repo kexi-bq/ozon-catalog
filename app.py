@@ -169,6 +169,7 @@ def load_catalog() -> pd.DataFrame:
     df["ozon_price_num"] = get_col(df, "ozon_price", 0).map(clean_float).fillna(df["retail_price_num"])
     if df["ozon_price_num"].eq(0).all() and "price" in df.columns:
         df["ozon_price_num"] = df["price"].map(clean_float).fillna(df["retail_price_num"])
+    df["price_source"] = get_col(df, "price_source", "").map(clean_str)
 
     df["stock_qty_num"] = get_col(df, "stock_qty", 0).map(clean_float).fillna(0)
     if df["stock_qty_num"].eq(0).all() and "stock" in df.columns:
@@ -300,7 +301,7 @@ def inject_css() -> None:
         .brand { font-size: 11px; color: #005bff; font-weight: 700; text-transform: uppercase; }
         .title { font-size: 15px; line-height: 1.35; font-weight: 700; color: #162033; min-height: 62px; margin: 8px 0 10px 0; }
         .price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
-        .old { font-size: 13px; color: #8a97a8; text-decoration: line-through; }
+        .old { font-size: 13px; color: #8a97a8; }
         .meta { font-size: 12px; color: #607087; line-height: 1.55; margin-top: 10px; }
         .full-info {
             border-top: 1px solid #edf2f8; margin-top: 12px; padding-top: 10px;
@@ -535,7 +536,7 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
 
     old_price = ""
     if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
-        old_price = f'<div class="old">{html.escape(format_price(row["retail_price_num"]))}</div>'
+        old_price = f'<div class="old">Цена источника: {html.escape(format_price(row["retail_price_num"]))}</div>'
 
     image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
     full_info = ""
@@ -680,7 +681,9 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
     with right:
         st.markdown(f"### {format_price(row['ozon_price_num'])}")
         if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
-            st.markdown(f"Старая цена: {format_price(row['retail_price_num'])}")
+            price_source = clean_str(row.get("price_source"))
+            source_suffix = f" ({price_source})" if price_source else ""
+            st.markdown(f"Цена источника{source_suffix}: {format_price(row['retail_price_num'])}")
         st.markdown(f"**Наличие:** {row['stock_text']}")
         if clean_str(row["external_url"]):
             st.link_button("Открыть источник", clean_str(row["external_url"]))
