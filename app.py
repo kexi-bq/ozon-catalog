@@ -14,7 +14,11 @@ import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
-DATA_PATH = APP_DIR / "data" / "catalog_500_exact_match.xlsx"
+DATA_CANDIDATES = [
+    APP_DIR / "data" / "dimensions_quality_audit.xlsx",
+    APP_DIR / "data" / "catalog_500_exact_match.xlsx",
+]
+DATA_PATH = next((p for p in DATA_CANDIDATES if p.exists()), DATA_CANDIDATES[0])
 PAGE_SIZE = 25
 
 
@@ -66,17 +70,45 @@ def resolve_image(value: Any) -> str:
     text = first_image(value)
     if not text:
         return ""
+
+    text = text.replace("\\", "/").strip()
+
     if text.startswith(("http://", "https://")):
         return text
-    path = APP_DIR / text
-    if path.exists():
-        return str(path)
-    root_path = ROOT / text
-    if root_path.exists():
-        return str(root_path)
+
+    # Старый парсер мог записать Windows-путь:
+    # C:/Users/.../images_refreshed/C11814/001.jpg
+    # На сайте такого пути нет, поэтому берём только хвост после images_refreshed/
+    # и ищем его в static/images_refreshed/.
+    image_marker = "images_refreshed/"
+    candidates: list[Path] = []
+
+    if image_marker in text:
+        tail = text.split(image_marker, 1)[1].lstrip("/")
+        candidates.extend(
+            [
+                APP_DIR / "static" / "images_refreshed" / tail,
+                APP_DIR / "images_refreshed" / tail,
+                ROOT / "static" / "images_refreshed" / tail,
+                ROOT / "images_refreshed" / tail,
+            ]
+        )
+
+    candidates.extend(
+        [
+            APP_DIR / text,
+            ROOT / text,
+        ]
+    )
+
     raw_path = Path(text)
-    if raw_path.is_absolute() and raw_path.exists():
-        return str(raw_path)
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
     return ""
 
 
@@ -223,12 +255,21 @@ def load_catalog() -> pd.DataFrame:
         + df["group_name"].fillna("").astype(str)
     ).str.lower()
 
+    # Стабильный ID товара.
+    # ВАЖНО: он назначается один раз при загрузке каталога и больше не пересчитывается
+    # при фильтрах, поиске, категориях и сортировках.
+    #
+    # Логика: ID 1-500 соответствует базовой сортировке "Цена: выше".
+    # То есть самый дорогой товар получает №1, следующий №2 и так далее.
     df = df.sort_values(
-        ["category_nav", "subcategory_nav", "brand", "title", "offer_id"],
+        ["ozon_price_num", "title", "brand", "offer_id", "code"],
+        ascending=[False, True, True, True, True],
         kind="stable",
     ).reset_index(drop=True)
 
     df["catalog_number"] = range(1, len(df) + 1)
+    df["product_id"] = df["catalog_number"].astype(str)
+
     return df
 
 
@@ -544,7 +585,7 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
     brand = html.escape(clean_str(row["brand"]))
     offer_id = html.escape(clean_str(row["offer_id"]))
     code = html.escape(clean_str(row["code"]))
-    display_number = int(row.get("display_number", row["catalog_number"]))
+    display_number = int(row["catalog_number"])
 
     old_price = ""
     if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
@@ -574,7 +615,7 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
 
     st.markdown(
         f"""
-        <a class="product-link" href="?offer_id={offer_id}" target="_self">
+        <a class="product-link" href="?product_id={display_number}" target="_self">
             <div class="product-card">
                 <div class="num-badge">№ {display_number}</div>
                 {image_html}
@@ -617,7 +658,6 @@ def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
 
 def render_catalog_page(df: pd.DataFrame) -> None:
     df = df.copy().reset_index(drop=True)
-    df["display_number"] = range(1, len(df) + 1)
 
     total_pages = max(1, math.ceil(len(df) / PAGE_SIZE))
     page = int(st.query_params.get("page", "1"))
@@ -663,8 +703,18 @@ def render_catalog_page(df: pd.DataFrame) -> None:
         render_pagination(page, total_pages, "bottom")
 
 
-def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
-    item = df[df["offer_id"].astype(str) == str(offer_id)]
+def render_product_page(df: pd.DataFrame, product_id: str = "", offer_id: str = "") -> None:
+    item = pd.DataFrame()
+
+    product_id_clean = clean_str(product_id)
+    if product_id_clean:
+        product_id_num = clean_float(product_id_clean)
+        if product_id_num is not None:
+            item = df[df["catalog_number"].astype(int) == int(product_id_num)]
+
+    if item.empty and offer_id:
+        item = df[df["offer_id"].astype(str) == str(offer_id)]
+
     if item.empty:
         st.error("Товар не найден")
         return
@@ -701,7 +751,7 @@ def render_product_page(df: pd.DataFrame, offer_id: str) -> None:
             st.link_button("Открыть источник", clean_str(row["external_url"]))
 
         specs = [
-            ("Порядковый номер", int(row["catalog_number"])),
+            ("Уникальный ID", int(row["catalog_number"])),
             ("Категория", category or "—"),
             ("Подкатегория", subcategory or "—"),
             ("Ozon-категория", ozon_category or "—"),
@@ -740,9 +790,10 @@ def main() -> None:
         unsafe_allow_html=True,
     )
 
+    product_id = st.query_params.get("product_id", "")
     offer_id = st.query_params.get("offer_id", "")
-    if offer_id:
-        render_product_page(df, offer_id)
+    if product_id or offer_id:
+        render_product_page(df, product_id=product_id, offer_id=offer_id)
         return
 
     filtered, selected_category, selected_subcategory = filter_catalog(df)
