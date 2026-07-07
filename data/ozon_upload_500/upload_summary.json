@@ -1,0 +1,13 @@
+{
+  "input": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_500_unique_real_photo_ready_v2.csv",
+  "mode": "dry-run",
+  "rows": 500,
+  "payload_items": 500,
+  "validation_report": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_upload_500\\upload_validation.xlsx",
+  "payload": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_upload_500\\payload_items.json",
+  "details": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_upload_500\\upload_details.xlsx",
+  "tasks": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_upload_500\\upload_tasks.xlsx",
+  "stock_tasks": "C:\\Users\\User\\Desktop\\общая прога для парсинга\\ozon_demo_git_ready\\data\\ozon_upload_500\\stock_tasks.xlsx",
+  "set_stocks": false,
+  "warehouse_id": 0
+}

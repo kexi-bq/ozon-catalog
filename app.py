@@ -17,7 +17,7 @@ APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
 
 DATA_CANDIDATES = [
-    APP_DIR / "data" / "catalog_500_FINAL_FOR_SITE.xlsx",
+    APP_DIR / "data" / "ozon_500_unique_real_photo_ready_v2.csv",
     APP_DIR / "data" / "dimensions_quality_audit.xlsx",
     APP_DIR / "data" / "catalog_500_exact_match.xlsx",
 ]
