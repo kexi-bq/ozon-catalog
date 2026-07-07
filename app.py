@@ -26,10 +26,42 @@ DATA_PATH = next((p for p in DATA_CANDIDATES if p.exists()), DATA_CANDIDATES[0])
 PAGE_SIZE = 25
 IMAGE_DIR_CANDIDATES = [
     APP_DIR / "static" / "images_refreshed",
-    ROOT / "static" / "images_refreshed",
     APP_DIR / "images_refreshed",
+    APP_DIR / "data" / "images_refreshed",
+    ROOT / "static" / "images_refreshed",
     ROOT / "images_refreshed",
 ]
+
+
+def is_url(value: str) -> bool:
+    text = clean_str(value).lower()
+    return text.startswith("http://") or text.startswith("https://")
+
+
+def is_windows_path(value: str) -> bool:
+    text = clean_str(value).replace("\\", "/")
+    return len(text) > 2 and text[1] == ":" and text[2] == "/"
+
+
+def normalize_image_source(value: str) -> str:
+    text = clean_str(value).replace("\\", "/").strip()
+    if not text:
+        return ""
+    if is_url(text):
+        return text
+    if "static/images_refreshed/" in text:
+        return text.split("static/images_refreshed/", 1)[1].lstrip("/\\")
+    if "images_refreshed/" in text:
+        return text.split("images_refreshed/", 1)[1].lstrip("/\\")
+    return text.lstrip("./")
+
+
+def strip_html(value: str) -> str:
+    text = clean_str(value)
+    if not text:
+        return ""
+    text = re.sub(r"<[^>]+>", "", text)
+    return text.strip()
 
 
 def clean_str(value: Any) -> str:
@@ -113,32 +145,49 @@ def existing_image_in_folder(folder_name: str) -> str:
 
 def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
     text = first_image(value)
+    text = clean_str(text)
+    if not text:
+        return ""
 
-    if text:
-        text = text.replace("\\", "/").strip()
+    if is_url(text):
+        return text
 
-        if text.startswith(("http://", "https://")):
-            return text
+    normalized = normalize_image_source(text)
+    if not normalized:
+        return ""
 
-        candidates: list[Path] = []
+    candidates: list[Path] = []
 
-        marker = "images_refreshed/"
-        if marker in text:
-            tail = text.split(marker, 1)[1].lstrip("/")
-            for root in IMAGE_DIR_CANDIDATES:
-                candidates.append(root / tail)
+    if is_windows_path(text):
+        candidates.append(Path(text))
 
-        candidates.extend([APP_DIR / text, ROOT / text])
+    if normalized.startswith("static/images_refreshed/"):
+        suffix = normalized.split("static/images_refreshed/", 1)[1]
+    elif normalized.startswith("images_refreshed/"):
+        suffix = normalized.split("images_refreshed/", 1)[1]
+    else:
+        suffix = normalized
 
-        raw_path = Path(text)
-        if raw_path.is_absolute():
-            candidates.append(raw_path)
+    suffix = suffix.lstrip("/\\")
+    for root in IMAGE_DIR_CANDIDATES:
+        candidates.append(root / suffix)
 
-        for path in candidates:
-            if path.exists():
-                return str(path)
+    candidates.extend([
+        APP_DIR / normalized,
+        APP_DIR / "static" / normalized,
+        APP_DIR / "data" / normalized,
+        ROOT / normalized,
+        ROOT / "static" / normalized,
+    ])
 
-    # Если в Excel путь пустой/битый, ищем по папке артикула или кода.
+    raw_path = Path(normalized)
+    if raw_path.is_absolute():
+        candidates.append(raw_path)
+
+    for path in candidates:
+        if path.exists():
+            return str(path)
+
     for key in [offer_id, code]:
         found = existing_image_in_folder(key)
         if found:
@@ -314,6 +363,7 @@ def load_catalog() -> pd.DataFrame:
         ],
     )
     df["primary_image"] = get_col(df, image_col, "").map(clean_str) if image_col else ""
+    df["primary_image"] = df["primary_image"].map(normalize_image_source)
     df["primary_image_resolved"] = df.apply(
         lambda r: resolve_image(r.get("primary_image"), r.get("offer_id"), r.get("code")),
         axis=1,
@@ -733,7 +783,7 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
             card_info_row("Цвет", row["color"]),
             card_info_row("Источник", row["external_url"]),
         ]
-        description = clean_str(row["description"])
+        description = strip_html(clean_str(row["description"]))
         description_html = f'<div class="full-description">{html.escape(description)}</div>' if description else ""
         full_info = f'<div class="full-info">{"".join(full_rows)}{description_html}</div>'
 
