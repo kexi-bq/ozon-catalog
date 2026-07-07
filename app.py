@@ -201,6 +201,16 @@ def _find_image_by_filename(normalized: str) -> str:
     return ""
 
 
+def _make_repo_relative(path: Path) -> str:
+    try:
+        return str(path.relative_to(APP_DIR)).replace("\\", "/")
+    except Exception:
+        try:
+            return str(path.relative_to(ROOT)).replace("\\", "/")
+        except Exception:
+            return str(path)
+
+
 def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
     text = first_image(value)
     text = clean_str(text)
@@ -237,20 +247,22 @@ def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
 
     for path in candidates:
         if path.exists():
+            if path.is_absolute():
+                return _make_repo_relative(path)
             return str(path)
 
     folder_based = _find_image_by_folder_suffix(normalized)
     if folder_based:
-        return folder_based
+        return _make_repo_relative(Path(folder_based))
 
     filename_based = _find_image_by_filename(normalized)
     if filename_based:
-        return filename_based
+        return _make_repo_relative(Path(filename_based))
 
     for key in [offer_id, code]:
         found = existing_image_in_folder(key)
         if found:
-            return found
+            return _make_repo_relative(Path(found))
 
     return ""
 
