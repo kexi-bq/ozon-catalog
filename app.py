@@ -524,14 +524,32 @@ def format_dimensions(row: pd.Series) -> str:
     if source_dimensions:
         return source_dimensions
 
-    length = clean_str(row["length"])
-    width = clean_str(row["width"])
-    height = clean_str(row["height"])
-    parts = [x for x in [length, width, height] if x]
+    # Collect possible dimension fields and unit
+    unit = clean_str(row.get("dimension_unit") or row.get("dimension_unit_mm") or "")
+    vals = []
+    for key in ["length", "width", "height", "depth", "dimension"]:
+        v = clean_str(row.get(key, ""))
+        if v:
+            vals.append(v)
 
-    if len(parts) == 3:
-        return f"{length} × {width} × {height}"
-    return "—"
+    # If only depth present but no length/width, include it
+    if not vals and clean_str(row.get("depth")):
+        vals = [clean_str(row.get("depth"))]
+
+    if not vals:
+        return "—"
+
+    # Display if we have at least two dimensions; otherwise show single with unit
+    if len(vals) >= 3:
+        text = f"{vals[0]} × {vals[1]} × {vals[2]}"
+    elif len(vals) == 2:
+        text = f"{vals[0]} × {vals[1]}"
+    else:
+        text = vals[0]
+
+    if unit:
+        return f"{text} {unit}"
+    return text
 
 
 def format_weight(value: Any) -> str:
