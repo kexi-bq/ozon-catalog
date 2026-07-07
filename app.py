@@ -28,8 +28,10 @@ IMAGE_DIR_CANDIDATES = [
     APP_DIR / "static" / "images_refreshed",
     APP_DIR / "images_refreshed",
     APP_DIR / "data" / "images_refreshed",
+    APP_DIR / "images",
     ROOT / "static" / "images_refreshed",
     ROOT / "images_refreshed",
+    ROOT / "images",
 ]
 
 
@@ -49,10 +51,26 @@ def normalize_image_source(value: str) -> str:
         return ""
     if is_url(text):
         return text
+
+    if is_windows_path(text):
+        # Convert Windows absolute paths to portable repo-relative image paths.
+        if "static/images_refreshed/" in text:
+            text = text.split("static/images_refreshed/", 1)[1]
+        elif "images_refreshed/" in text:
+            text = text.split("images_refreshed/", 1)[1]
+        elif "/images/" in text:
+            text = "images/" + text.split("/images/", 1)[1].lstrip("/\\")
+        elif "catalog/import/" in text:
+            text = text.split("catalog/import/", 1)[1].lstrip("/\\")
+        else:
+            text = text.split(":", 1)[1].lstrip("/\\")
+
     if "static/images_refreshed/" in text:
         return text.split("static/images_refreshed/", 1)[1].lstrip("/\\")
     if "images_refreshed/" in text:
         return text.split("images_refreshed/", 1)[1].lstrip("/\\")
+    if "/images/" in text and not text.startswith("images/"):
+        return "images/" + text.split("/images/", 1)[1].lstrip("/\\")
     return text.lstrip("./")
 
 
@@ -143,6 +161,46 @@ def existing_image_in_folder(folder_name: str) -> str:
     return ""
 
 
+def _image_candidates_for_root(root: Path, suffix: str) -> list[Path]:
+    candidates: list[Path] = []
+    suffix_path = Path(suffix)
+    candidates.append(root / suffix_path)
+
+    for depth in range(1, len(root.parts) + 1):
+        prefix = Path(*root.parts[-depth:])
+        if suffix_path.parts[: len(prefix.parts)] == prefix.parts:
+            try:
+                rel = suffix_path.relative_to(prefix)
+            except Exception:
+                continue
+            candidates.append(root / rel)
+    return candidates
+
+
+def _find_image_by_folder_suffix(normalized: str) -> str:
+    parts = Path(normalized).parts
+    if len(parts) < 2:
+        return ""
+    folder_name = parts[-2]
+    filename = parts[-1]
+    for root in IMAGE_DIR_CANDIDATES:
+        candidate = root / folder_name / filename
+        if candidate.exists():
+            return str(candidate)
+    return ""
+
+
+def _find_image_by_filename(normalized: str) -> str:
+    filename = Path(normalized).name
+    if not filename:
+        return ""
+    for root in IMAGE_DIR_CANDIDATES:
+        for candidate in root.rglob(filename):
+            if candidate.exists():
+                return str(candidate)
+    return ""
+
+
 def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
     text = first_image(value)
     text = clean_str(text)
@@ -159,34 +217,35 @@ def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
     candidates: list[Path] = []
 
     if is_windows_path(text):
-        candidates.append(Path(text))
+        windows_path = Path(text)
+        if windows_path.exists():
+            return str(windows_path)
+        candidates.append(windows_path)
 
-    if normalized.startswith("static/images_refreshed/"):
-        suffix = normalized.split("static/images_refreshed/", 1)[1]
-    elif normalized.startswith("images_refreshed/"):
-        suffix = normalized.split("images_refreshed/", 1)[1]
-    else:
-        suffix = normalized
-
-    suffix = suffix.lstrip("/\\")
-    for root in IMAGE_DIR_CANDIDATES:
-        candidates.append(root / suffix)
-
+    normalized_path = Path(normalized)
     candidates.extend([
-        APP_DIR / normalized,
-        APP_DIR / "static" / normalized,
-        APP_DIR / "data" / normalized,
-        ROOT / normalized,
-        ROOT / "static" / normalized,
+        normalized_path,
+        APP_DIR / normalized_path,
+        APP_DIR / "static" / normalized_path,
+        APP_DIR / "data" / normalized_path,
+        ROOT / normalized_path,
+        ROOT / "static" / normalized_path,
     ])
 
-    raw_path = Path(normalized)
-    if raw_path.is_absolute():
-        candidates.append(raw_path)
+    for root in IMAGE_DIR_CANDIDATES:
+        candidates.extend(_image_candidates_for_root(root, normalized))
 
     for path in candidates:
         if path.exists():
             return str(path)
+
+    folder_based = _find_image_by_folder_suffix(normalized)
+    if folder_based:
+        return folder_based
+
+    filename_based = _find_image_by_filename(normalized)
+    if filename_based:
+        return filename_based
 
     for key in [offer_id, code]:
         found = existing_image_in_folder(key)
