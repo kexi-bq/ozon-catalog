@@ -4,6 +4,7 @@ import ast
 import base64
 import html
 import math
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -614,25 +615,27 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
         full_info = f'<div class="full-info">{"".join(full_rows)}{description_html}</div>'
 
     st.markdown(
-        f"""
-        <a class="product-link" href="?product_id={display_number}" target="_self">
-            <div class="product-card">
-                <div class="num-badge">№ {display_number}</div>
-                {image_html}
-                <div class="brand">{brand}</div>
-                <div class="title">{title}</div>
-                <div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>
-                {old_price}
-                <div class="meta">
-                    Категория: {category}<br>
-                    Подкатегория: {subcategory}<br>
-                    Артикул: {offer_id}<br>
-                    Код: {code}
+        textwrap.dedent(
+            f"""
+            <a class="product-link" href="?product_id={display_number}" target="_self">
+                <div class="product-card">
+                    <div class="num-badge">№ {display_number}</div>
+                    {image_html}
+                    <div class="brand">{brand}</div>
+                    <div class="title">{title}</div>
+                    <div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>
+                    {old_price}
+                    <div class="meta">
+                        Категория: {category}<br>
+                        Подкатегория: {subcategory}<br>
+                        Артикул: {offer_id}<br>
+                        Код: {code}
+                    </div>
+                    {full_info}
                 </div>
-                {full_info}
-            </div>
-        </a>
-        """,
+            </a>
+            """
+        ),
         unsafe_allow_html=True,
     )
 
