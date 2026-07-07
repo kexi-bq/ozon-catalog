@@ -320,7 +320,21 @@ def parse_category_path_parts(value: Any) -> tuple[str, str]:
 
 @st.cache_data(show_spinner=True)
 def load_catalog() -> pd.DataFrame:
-    df = pd.read_excel(DATA_PATH, dtype=object)
+    # Try to read Excel explicitly with openpyxl engine when possible; fall back to CSV
+    try:
+        if str(DATA_PATH).lower().endswith(('.xls', '.xlsx', '.xlsm')):
+            df = pd.read_excel(DATA_PATH, dtype=object, engine='openpyxl')
+        elif str(DATA_PATH).lower().endswith('.csv'):
+            df = pd.read_csv(DATA_PATH, dtype=object, sep=';', on_bad_lines='skip')
+        else:
+            # unknown extension: try excel first, then csv
+            try:
+                df = pd.read_excel(DATA_PATH, dtype=object, engine='openpyxl')
+            except Exception:
+                df = pd.read_csv(DATA_PATH, dtype=object, sep=';', on_bad_lines='skip')
+    except Exception as exc:
+        # As a last resort, raise a clearer error
+        raise ValueError(f"Failed to read DATA_PATH={DATA_PATH!s}: {exc}")
 
     df["offer_id"] = get_col(df, "offer_id", "").map(clean_str)
     if df["offer_id"].eq("").all() and "sku" in df.columns:
