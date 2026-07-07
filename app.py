@@ -249,7 +249,7 @@ def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
         if path.exists():
             if path.is_absolute():
                 return _make_repo_relative(path)
-            return str(path)
+            return path.as_posix()
 
     folder_based = _find_image_by_folder_suffix(normalized)
     if folder_based:
@@ -276,6 +276,8 @@ def image_to_src(path_or_url: str) -> str:
         return text
 
     path = Path(text)
+    if not path.is_absolute():
+        path = APP_DIR / path
     if not path.exists():
         return ""
 
@@ -983,8 +985,9 @@ def render_product_page(df: pd.DataFrame, product_id: str = "", offer_id: str = 
     left, right = st.columns([1.05, 1])
 
     with left:
-        if row["primary_image_resolved"]:
-            st.image(row["primary_image_resolved"], width="stretch")
+        src = image_to_src(row["primary_image_resolved"])
+        if src:
+            st.image(src, width="stretch")
 
     with right:
         st.markdown(f"### {format_price(row['ozon_price_num'])}")
