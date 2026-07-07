@@ -17,6 +17,7 @@ APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
 
 DATA_CANDIDATES = [
+    APP_DIR / "data" / "catalog_500_FINAL_FOR_SITE.xlsx",
     APP_DIR / "data" / "dimensions_quality_audit.xlsx",
     APP_DIR / "data" / "catalog_500_exact_match.xlsx",
 ]
@@ -182,6 +183,19 @@ def first_existing_col(df: pd.DataFrame, names: list[str]) -> str:
     return ""
 
 
+def parse_category_path_parts(value: Any) -> tuple[str, str]:
+    text = clean_str(value)
+    if not text:
+        return "", ""
+
+    parts = [part.strip() for part in re.split(r"[/\\]", text) if part.strip()]
+    if len(parts) >= 2:
+        return parts[0], parts[1]
+    if len(parts) == 1:
+        return parts[0], ""
+    return "", ""
+
+
 @st.cache_data(show_spinner=True)
 def load_catalog() -> pd.DataFrame:
     df = pd.read_excel(DATA_PATH, dtype=object)
@@ -216,6 +230,12 @@ def load_catalog() -> pd.DataFrame:
                     df["category_nav"] = s
                     break
 
+    if df["category_nav"].eq("").all() and "category_id" in df.columns:
+        df["category_nav"] = get_col(df, "category_id", "").map(clean_str)
+
+    if df["category_nav"].eq("").all() and "category_path" in df.columns:
+        df["category_nav"] = df["category_path"].apply(lambda value: parse_category_path_parts(value)[0])
+
     df["subcategory_nav"] = get_col(df, "local_category_2", "").map(clean_str)
     if df["subcategory_nav"].eq("").all():
         for col in ["subcategory", "Подкатегория", "ready_subcategory"]:
@@ -224,6 +244,12 @@ def load_catalog() -> pd.DataFrame:
                 if not s.eq("").all():
                     df["subcategory_nav"] = s
                     break
+
+    if df["subcategory_nav"].eq("").all() and "type_id" in df.columns:
+        df["subcategory_nav"] = get_col(df, "type_id", "").map(clean_str)
+
+    if df["subcategory_nav"].eq("").all() and "category_path" in df.columns:
+        df["subcategory_nav"] = df["category_path"].apply(lambda value: parse_category_path_parts(value)[1])
 
     df["group_name"] = get_col(df, "group_name", "").map(clean_str)
     if df["group_name"].eq("").all():
@@ -889,8 +915,8 @@ def main() -> None:
     st.markdown(
         """
 <div class="topbar">
-    <h1>Catalog 500 Exact</h1>
-    <p>Витрина: 500 не метражных товаров с точным совпадением по артикулу/коду, фото, категориями и supplier-ценами.</p>
+    <h1>Catalog 500 Final</h1>
+    <p>Витрина: финальный каталог из файла catalog_500_FINAL_FOR_SITE.xlsx с товарами, ценами, фото и фильтрами.</p>
 </div>
         """,
         unsafe_allow_html=True,
