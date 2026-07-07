@@ -4,7 +4,7 @@ import ast
 import base64
 import html
 import math
-import textwrap
+import re
 from pathlib import Path
 from typing import Any
 
@@ -15,12 +15,20 @@ import streamlit.components.v1 as components
 
 APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
+
 DATA_CANDIDATES = [
     APP_DIR / "data" / "dimensions_quality_audit.xlsx",
     APP_DIR / "data" / "catalog_500_exact_match.xlsx",
 ]
 DATA_PATH = next((p for p in DATA_CANDIDATES if p.exists()), DATA_CANDIDATES[0])
+
 PAGE_SIZE = 25
+IMAGE_DIR_CANDIDATES = [
+    APP_DIR / "static" / "images_refreshed",
+    ROOT / "static" / "images_refreshed",
+    APP_DIR / "images_refreshed",
+    ROOT / "images_refreshed",
+]
 
 
 def clean_str(value: Any) -> str:
@@ -36,9 +44,11 @@ def clean_float(value: Any) -> float | None:
         return None
     if isinstance(value, float) and pd.isna(value):
         return None
+
     text = str(value).strip()
     if not text:
         return None
+
     text = (
         text.replace("\u00a0", "")
         .replace("₽", "")
@@ -47,16 +57,25 @@ def clean_float(value: Any) -> float | None:
         .replace(" ", "")
         .replace(",", ".")
     )
+
     try:
         return float(text)
     except Exception:
         return None
 
 
+def normalize_sku(value: Any) -> str:
+    text = clean_str(value).upper()
+    text = text.replace("№", "").replace(" ", "")
+    text = re.sub(r"[^A-ZА-Я0-9_\-./]", "", text)
+    return text
+
+
 def first_image(value: Any) -> str:
     text = clean_str(value)
     if not text:
         return ""
+
     if text.startswith("[") and text.endswith("]"):
         try:
             parsed = ast.literal_eval(text)
@@ -64,51 +83,65 @@ def first_image(value: Any) -> str:
                 return clean_str(parsed[0])
         except Exception:
             pass
+
+    # несколько путей могли лежать через ; или |
+    for sep in [";", "|", ","]:
+        if sep in text and not text.lower().startswith(("http://", "https://")):
+            first = clean_str(text.split(sep)[0])
+            if first:
+                return first
+
     return text
 
 
-def resolve_image(value: Any) -> str:
-    text = first_image(value)
-    if not text:
+def existing_image_in_folder(folder_name: str) -> str:
+    folder_name = normalize_sku(folder_name)
+    if not folder_name:
         return ""
 
-    text = text.replace("\\", "/").strip()
+    for root in IMAGE_DIR_CANDIDATES:
+        folder = root / folder_name
+        if not folder.exists():
+            continue
+        for pattern in ["001.*", "1.*", "*.jpg", "*.jpeg", "*.png", "*.webp"]:
+            matches = sorted(folder.glob(pattern))
+            if matches:
+                return str(matches[0])
+    return ""
 
-    if text.startswith(("http://", "https://")):
-        return text
 
-    # Старый парсер мог записать Windows-путь:
-    # C:/Users/.../images_refreshed/C11814/001.jpg
-    # На сайте такого пути нет, поэтому берём только хвост после images_refreshed/
-    # и ищем его в static/images_refreshed/.
-    image_marker = "images_refreshed/"
-    candidates: list[Path] = []
+def resolve_image(value: Any, offer_id: Any = "", code: Any = "") -> str:
+    text = first_image(value)
 
-    if image_marker in text:
-        tail = text.split(image_marker, 1)[1].lstrip("/")
-        candidates.extend(
-            [
-                APP_DIR / "static" / "images_refreshed" / tail,
-                APP_DIR / "images_refreshed" / tail,
-                ROOT / "static" / "images_refreshed" / tail,
-                ROOT / "images_refreshed" / tail,
-            ]
-        )
+    if text:
+        text = text.replace("\\", "/").strip()
 
-    candidates.extend(
-        [
-            APP_DIR / text,
-            ROOT / text,
-        ]
-    )
+        if text.startswith(("http://", "https://")):
+            return text
 
-    raw_path = Path(text)
-    if raw_path.is_absolute():
-        candidates.append(raw_path)
+        candidates: list[Path] = []
 
-    for path in candidates:
-        if path.exists():
-            return str(path)
+        marker = "images_refreshed/"
+        if marker in text:
+            tail = text.split(marker, 1)[1].lstrip("/")
+            for root in IMAGE_DIR_CANDIDATES:
+                candidates.append(root / tail)
+
+        candidates.extend([APP_DIR / text, ROOT / text])
+
+        raw_path = Path(text)
+        if raw_path.is_absolute():
+            candidates.append(raw_path)
+
+        for path in candidates:
+            if path.exists():
+                return str(path)
+
+    # Если в Excel путь пустой/битый, ищем по папке артикула или кода.
+    for key in [offer_id, code]:
+        found = existing_image_in_folder(key)
+        if found:
+            return found
 
     return ""
 
@@ -120,15 +153,18 @@ def image_to_src(path_or_url: str) -> str:
         return ""
     if text.startswith(("http://", "https://")):
         return text
+
     path = Path(text)
     if not path.exists():
         return ""
+
     suffix = path.suffix.lower()
     mime = "image/jpeg"
     if suffix == ".png":
         mime = "image/png"
     elif suffix == ".webp":
         mime = "image/webp"
+
     data = base64.b64encode(path.read_bytes()).decode("utf-8")
     return f"data:{mime};base64,{data}"
 
@@ -137,6 +173,13 @@ def get_col(df: pd.DataFrame, name: str, default: Any = "") -> pd.Series:
     if name in df.columns:
         return df[name]
     return pd.Series([default] * len(df), index=df.index)
+
+
+def first_existing_col(df: pd.DataFrame, names: list[str]) -> str:
+    for name in names:
+        if name in df.columns:
+            return name
+    return ""
 
 
 @st.cache_data(show_spinner=True)
@@ -160,10 +203,27 @@ def load_catalog() -> pd.DataFrame:
         df["full_name"] = df["name"].map(clean_str)
 
     df["brand"] = get_col(df, "brand", "").map(clean_str)
+    if df["brand"].eq("").all() and "live_brand" in df.columns:
+        df["brand"] = df["live_brand"].map(clean_str)
     df["brand_clean"] = df["brand"].map(clean_str)
 
     df["category_nav"] = get_col(df, "local_category_1", "").map(clean_str)
+    if df["category_nav"].eq("").all():
+        for col in ["category", "Категория", "ready_category", "aggr_final_category"]:
+            if col in df.columns:
+                s = df[col].map(clean_str)
+                if not s.eq("").all() and not s.isin(["True", "False"]).all():
+                    df["category_nav"] = s
+                    break
+
     df["subcategory_nav"] = get_col(df, "local_category_2", "").map(clean_str)
+    if df["subcategory_nav"].eq("").all():
+        for col in ["subcategory", "Подкатегория", "ready_subcategory"]:
+            if col in df.columns:
+                s = df[col].map(clean_str)
+                if not s.eq("").all():
+                    df["subcategory_nav"] = s
+                    break
 
     df["group_name"] = get_col(df, "group_name", "").map(clean_str)
     if df["group_name"].eq("").all():
@@ -188,14 +248,18 @@ def load_catalog() -> pd.DataFrame:
 
     if "ozon_category_name" in df.columns:
         df["ozon_category_display"] = df["ozon_category_name"].map(clean_str)
-    elif "aggr_final_category" in df.columns:
-        df["ozon_category_display"] = df["aggr_final_category"].map(clean_str)
     elif "mapped_ozon_category_name" in df.columns:
         df["ozon_category_display"] = df["mapped_ozon_category_name"].map(clean_str)
+    elif "aggr_final_category" in df.columns:
+        df["ozon_category_display"] = df["aggr_final_category"].map(clean_str)
     else:
         df["ozon_category_display"] = ""
 
+    df.loc[df["ozon_category_display"].isin(["True", "False"]), "ozon_category_display"] = ""
+
     df["retail_price_num"] = get_col(df, "retail_price", 0).map(clean_float).fillna(0.0)
+    if df["retail_price_num"].eq(0).all() and "supplier_price" in df.columns:
+        df["retail_price_num"] = df["supplier_price"].map(clean_float).fillna(0.0)
     if df["retail_price_num"].eq(0).all() and "price" in df.columns:
         df["retail_price_num"] = df["price"].map(clean_float).fillna(0.0)
 
@@ -208,9 +272,26 @@ def load_catalog() -> pd.DataFrame:
     if df["stock_qty_num"].eq(0).all() and "stock" in df.columns:
         df["stock_qty_num"] = df["stock"].map(clean_float).fillna(0)
 
-    image_col = "primary_image" if "primary_image" in df.columns else "main_image"
-    df["primary_image"] = get_col(df, image_col, "").map(clean_str)
-    df["primary_image_resolved"] = df["primary_image"].map(resolve_image)
+    image_col = first_existing_col(
+        df,
+        [
+            "primary_image",
+            "main_image",
+            "image",
+            "image_path",
+            "local_image_path",
+            "photo",
+            "photo_path",
+            "images",
+            "image_paths",
+            "images_json",
+        ],
+    )
+    df["primary_image"] = get_col(df, image_col, "").map(clean_str) if image_col else ""
+    df["primary_image_resolved"] = df.apply(
+        lambda r: resolve_image(r.get("primary_image"), r.get("offer_id"), r.get("code")),
+        axis=1,
+    )
     df["has_image"] = df["primary_image_resolved"].astype(str).str.strip().ne("")
 
     df["stock_text"] = df["stock_qty_num"].apply(
@@ -256,12 +337,7 @@ def load_catalog() -> pd.DataFrame:
         + df["group_name"].fillna("").astype(str)
     ).str.lower()
 
-    # Стабильный ID товара.
-    # ВАЖНО: он назначается один раз при загрузке каталога и больше не пересчитывается
-    # при фильтрах, поиске, категориях и сортировках.
-    #
-    # Логика: ID 1-500 соответствует базовой сортировке "Цена: выше".
-    # То есть самый дорогой товар получает №1, следующий №2 и так далее.
+    # Стабильный ID: 1-500 соответствует базовой сортировке "Цена: выше".
     df = df.sort_values(
         ["ozon_price_num", "title", "brand", "offer_id", "code"],
         ascending=[False, True, True, True, True],
@@ -284,10 +360,12 @@ def format_dimensions(row: pd.Series) -> str:
     source_dimensions = clean_str(row.get("source_dimensions_text"))
     if source_dimensions:
         return source_dimensions
+
     length = clean_str(row["length"])
     width = clean_str(row["width"])
     height = clean_str(row["height"])
     parts = [x for x in [length, width, height] if x]
+
     if len(parts) == 3:
         return f"{length} × {width} × {height}"
     return "—"
@@ -317,125 +395,125 @@ def format_row_weight(row: pd.Series) -> str:
 def inject_css() -> None:
     st.markdown(
         """
-        <style>
-        .stApp { background: #f4f7fb; }
-        .block-container { max-width: 1380px; padding-top: 1rem; padding-bottom: 2rem; }
+<style>
+.stApp { background: #f4f7fb; }
+.block-container { max-width: 1380px; padding-top: 1rem; padding-bottom: 2rem; }
 
-        .topbar {
-            background: linear-gradient(135deg, #005bff 0%, #2b7cff 60%, #8cb6ff 100%);
-            border-radius: 24px; padding: 20px 24px; color: white; margin-bottom: 18px;
-        }
-        .topbar h1 { margin: 0; font-size: 34px; font-weight: 800; }
-        .topbar p { margin: 8px 0 0 0; font-size: 14px; color: rgba(255,255,255,.9); }
+.topbar {
+    background: linear-gradient(135deg, #005bff 0%, #2b7cff 60%, #8cb6ff 100%);
+    border-radius: 24px; padding: 20px 24px; color: white; margin-bottom: 18px;
+}
+.topbar h1 { margin: 0; font-size: 34px; font-weight: 800; }
+.topbar p { margin: 8px 0 0 0; font-size: 14px; color: rgba(255,255,255,.9); }
 
-        .metric {
-            background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 16px 18px;
-        }
-        .metric-label { color: #607087; font-size: 12px; margin-bottom: 6px; }
-        .metric-value { color: #1f2d3d; font-size: 24px; font-weight: 800; }
+.metric {
+    background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 16px 18px;
+}
+.metric-label { color: #607087; font-size: 12px; margin-bottom: 6px; }
+.metric-value { color: #1f2d3d; font-size: 24px; font-weight: 800; }
 
-        .category-title { font-size: 24px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: #1f2d3d; }
+.category-title { font-size: 24px; font-weight: 800; margin-top: 18px; margin-bottom: 10px; color: #1f2d3d; }
 
-        .product-link { text-decoration: none !important; color: inherit !important; display: block; }
-        .product-card {
-            background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 12px;
-            min-height: 100%; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
-        }
-        .product-card:hover {
-            transform: translateY(-2px); box-shadow: 0 10px 26px rgba(15, 35, 80, .12); border-color: #8cb6ff;
-        }
-        .product-image {
-            width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fbff;
-            border-radius: 14px; display: block; margin-bottom: 10px;
-        }
-        .num-badge {
-            display: inline-block; background: #eef4ff; color: #005bff; border: 1px solid #cfe0ff;
-            border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 800; margin-bottom: 8px;
-        }
-        .brand { font-size: 11px; color: #005bff; font-weight: 700; text-transform: uppercase; }
-        .title { font-size: 15px; line-height: 1.35; font-weight: 700; color: #162033; min-height: 62px; margin: 8px 0 10px 0; }
-        .price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
-        .old { font-size: 13px; color: #8a97a8; }
-        .meta { font-size: 12px; color: #607087; line-height: 1.55; margin-top: 10px; }
-        .full-info {
-            border-top: 1px solid #edf2f8; margin-top: 12px; padding-top: 10px;
-            font-size: 12px; color: #41536b; line-height: 1.55; overflow-wrap: anywhere; word-break: break-word;
-        }
-        .full-info-row { margin-bottom: 5px; }
-        .full-info-label { color: #718198; font-weight: 700; }
-        .full-description {
-            margin-top: 8px; padding: 9px 10px; border-radius: 12px; background: #f8fbff;
-            color: #304057; white-space: pre-wrap;
-        }
+.product-link { text-decoration: none !important; color: inherit !important; display: block; }
+.product-card {
+    background: white; border: 1px solid #dfe7f2; border-radius: 18px; padding: 12px;
+    min-height: 100%; transition: transform .12s ease, box-shadow .12s ease, border-color .12s ease;
+}
+.product-card:hover {
+    transform: translateY(-2px); box-shadow: 0 10px 26px rgba(15, 35, 80, .12); border-color: #8cb6ff;
+}
+.product-image {
+    width: 100%; aspect-ratio: 1 / 1; object-fit: contain; background: #f8fbff;
+    border-radius: 14px; display: block; margin-bottom: 10px;
+}
+.num-badge {
+    display: inline-block; background: #eef4ff; color: #005bff; border: 1px solid #cfe0ff;
+    border-radius: 999px; padding: 4px 9px; font-size: 12px; font-weight: 800; margin-bottom: 8px;
+}
+.brand { font-size: 11px; color: #005bff; font-weight: 700; text-transform: uppercase; min-height: 14px; }
+.title { font-size: 15px; line-height: 1.35; font-weight: 700; color: #162033; min-height: 62px; margin: 8px 0 10px 0; }
+.price { font-size: 26px; font-weight: 800; color: #f91155; margin: 8px 0 2px 0; }
+.old { font-size: 13px; color: #8a97a8; }
+.meta { font-size: 12px; color: #607087; line-height: 1.55; margin-top: 10px; }
+.full-info {
+    border-top: 1px solid #edf2f8; margin-top: 12px; padding-top: 10px;
+    font-size: 12px; color: #41536b; line-height: 1.55; overflow-wrap: anywhere; word-break: break-word;
+}
+.full-info-row { margin-bottom: 5px; }
+.full-info-label { color: #718198; font-weight: 700; }
+.full-description {
+    margin-top: 8px; padding: 9px 10px; border-radius: 12px; background: #f8fbff;
+    color: #304057; white-space: pre-wrap;
+}
 
-        .badge {
-            display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
-            margin-top: 8px; background: #eaf8ef; color: #138a43;
-        }
-        .badge.out { background: #fff2e2; color: #a45d00; }
+.badge {
+    display: inline-block; padding: 5px 10px; border-radius: 999px; font-size: 12px; font-weight: 700;
+    margin-top: 8px; background: #eaf8ef; color: #138a43;
+}
+.badge.out { background: #fff2e2; color: #a45d00; }
 
-        .detail { background: white; border: 1px solid #dfe7f2; border-radius: 24px; padding: 24px; }
-        .spec { background: #f8fbff; border: 1px solid #e4edf9; border-radius: 18px; padding: 14px 16px; margin-bottom: 10px; }
-        .spec-label { font-size: 12px; color: #718198; margin-bottom: 4px; }
-        .spec-value { font-size: 15px; color: #18253a; font-weight: 600; word-break: break-word; }
+.detail { background: white; border: 1px solid #dfe7f2; border-radius: 24px; padding: 24px; }
+.spec { background: #f8fbff; border: 1px solid #e4edf9; border-radius: 18px; padding: 14px 16px; margin-bottom: 10px; }
+.spec-label { font-size: 12px; color: #718198; margin-bottom: 4px; }
+.spec-value { font-size: 15px; color: #18253a; font-weight: 600; word-break: break-word; }
 
-        div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
-        img { border-radius: 14px; }
+div[data-testid="stButton"] button { border-radius: 14px; min-height: 42px; white-space: normal; }
+img { border-radius: 14px; }
 
-        *, *::before, *::after { box-sizing: border-box; }
-        html, body, .stApp { overflow-x: hidden; }
+*, *::before, *::after { box-sizing: border-box; }
+html, body, .stApp { overflow-x: hidden; }
 
-        @media (max-width: 768px) {
-            .block-container {
-                padding-left: 12px !important;
-                padding-right: 12px !important;
-                padding-top: .6rem;
-                max-width: 100% !important;
-            }
-            .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
-            .topbar h1 { font-size: 25px; line-height: 1.15; }
-            .topbar p { font-size: 12px; line-height: 1.35; }
-            .metric { padding: 12px 13px; border-radius: 14px; }
-            .metric-value { font-size: 20px; }
-            .category-title { font-size: 20px; }
-            .title { min-height: auto; font-size: 14px; }
-            .price { font-size: 22px; }
-            .detail { padding: 16px; border-radius: 18px; }
-            .product-card {
-                width: 100%;
-                max-width: 100%;
-                padding: 10px;
-                border-radius: 14px;
-                overflow: hidden;
-            }
-            .product-link { width: 100%; max-width: 100%; }
-            .product-image { max-width: 100%; height: auto; }
-            .meta, .title, .brand, .spec-value { overflow-wrap: anywhere; word-break: break-word; }
-            div[data-testid="stHorizontalBlock"] {
-                flex-wrap: wrap !important;
-                gap: .6rem !important;
-            }
-            div[data-testid="column"] {
-                width: auto !important;
-                min-width: calc(50% - .3rem) !important;
-                flex: 1 1 calc(50% - .3rem) !important;
-            }
-        }
+@media (max-width: 768px) {
+    .block-container {
+        padding-left: 12px !important;
+        padding-right: 12px !important;
+        padding-top: .6rem;
+        max-width: 100% !important;
+    }
+    .topbar { border-radius: 18px; padding: 16px; margin-bottom: 12px; }
+    .topbar h1 { font-size: 25px; line-height: 1.15; }
+    .topbar p { font-size: 12px; line-height: 1.35; }
+    .metric { padding: 12px 13px; border-radius: 14px; }
+    .metric-value { font-size: 20px; }
+    .category-title { font-size: 20px; }
+    .title { min-height: auto; font-size: 14px; }
+    .price { font-size: 22px; }
+    .detail { padding: 16px; border-radius: 18px; }
+    .product-card {
+        width: 100%;
+        max-width: 100%;
+        padding: 10px;
+        border-radius: 14px;
+        overflow: hidden;
+    }
+    .product-link { width: 100%; max-width: 100%; }
+    .product-image { max-width: 100%; height: auto; }
+    .meta, .title, .brand, .spec-value { overflow-wrap: anywhere; word-break: break-word; }
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        gap: .6rem !important;
+    }
+    div[data-testid="column"] {
+        width: auto !important;
+        min-width: calc(50% - .3rem) !important;
+        flex: 1 1 calc(50% - .3rem) !important;
+    }
+}
 
-        @media (max-width: 480px) {
-            .block-container {
-                padding-left: 10px !important;
-                padding-right: 10px !important;
-            }
-            div[data-testid="column"] {
-                width: 100% !important;
-                min-width: 100% !important;
-                flex: 1 1 100% !important;
-            }
-            .topbar h1 { font-size: 23px; }
-            .price { font-size: 21px; }
-        }
-        </style>
+@media (max-width: 480px) {
+    .block-container {
+        padding-left: 10px !important;
+        padding-right: 10px !important;
+    }
+    div[data-testid="column"] {
+        width: 100% !important;
+        min-width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+    .topbar h1 { font-size: 23px; }
+    .price { font-size: 21px; }
+}
+</style>
         """,
         unsafe_allow_html=True,
     )
@@ -449,21 +527,30 @@ def render_metrics(df: pd.DataFrame) -> None:
         ("Брендов", f"{int(df['brand_clean'].nunique()):,}".replace(",", " ")),
         ("Средняя цена", format_price(df["ozon_price_num"].mean() if not df.empty else 0)),
     ]
+
     for col, (label, value) in zip((c1, c2, c3, c4), values):
         with col:
-            st.markdown(f'<div class="metric"><div class="metric-label">{label}</div><div class="metric-value">{value}</div></div>', unsafe_allow_html=True)
+            st.markdown(
+                f'<div class="metric"><div class="metric-label">{html.escape(label)}</div><div class="metric-value">{html.escape(value)}</div></div>',
+                unsafe_allow_html=True,
+            )
 
 
 def render_category_shortcuts(df: pd.DataFrame) -> None:
     category_counts = (
         df[df["category_nav"].astype(str).str.strip().ne("")]
-        .groupby("category_nav").size().sort_values(ascending=False).head(12)
+        .groupby("category_nav")
+        .size()
+        .sort_values(ascending=False)
+        .head(12)
     )
+
     if category_counts.empty:
         return
 
     st.markdown('<div class="category-title">Категории</div>', unsafe_allow_html=True)
     cols = st.columns(4)
+
     for idx, (category_name, count) in enumerate(category_counts.items()):
         with cols[idx % 4]:
             if st.button(f"{category_name} ({count})", key=f"cat_shortcut_{idx}", use_container_width=True):
@@ -480,13 +567,18 @@ def render_subcategory_shortcuts(df: pd.DataFrame, selected_category: str) -> No
     pool = df[df["category_nav"] == selected_category]
     subcategory_counts = (
         pool[pool["subcategory_nav"].astype(str).str.strip().ne("")]
-        .groupby("subcategory_nav").size().sort_values(ascending=False).head(16)
+        .groupby("subcategory_nav")
+        .size()
+        .sort_values(ascending=False)
+        .head(16)
     )
+
     if subcategory_counts.empty:
         return
 
     st.markdown("#### Подкатегории")
     cols = st.columns(4)
+
     for idx, (subcategory_name, count) in enumerate(subcategory_counts.items()):
         with cols[idx % 4]:
             if st.button(f"{subcategory_name} ({count})", key=f"subcat_shortcut_{idx}", use_container_width=True):
@@ -525,17 +617,26 @@ def filter_catalog(df: pd.DataFrame) -> tuple[pd.DataFrame, str, str]:
     else:
         st.query_params.pop("subcategory", None)
 
-    selected_brands = st.sidebar.multiselect("Бренд", sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)]))
+    brand_options = sorted([x for x in df["brand_clean"].dropna().unique().tolist() if clean_str(x)])
+    selected_brands = st.sidebar.multiselect("Бренд", brand_options)
     only_in_stock = st.sidebar.checkbox("Только в наличии")
-    only_with_photo = st.sidebar.checkbox("Только с фото", value=True)
+    only_with_photo = st.sidebar.checkbox("Только с фото", value=False)
 
     min_price = int(df["ozon_price_num"].min()) if not df.empty else 0
     max_price = int(df["ozon_price_num"].max()) if not df.empty else 0
-    price_range = st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price)) if max_price > min_price else (min_price, max_price)
+    price_range = (
+        st.sidebar.slider("Цена Ozon", min_price, max_price, (min_price, max_price))
+        if max_price > min_price
+        else (min_price, max_price)
+    )
 
-    sort_by = st.sidebar.selectbox("Сортировка", ["По умолчанию", "Номер: сначала", "Номер: конец", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"])
+    sort_by = st.sidebar.selectbox(
+        "Сортировка",
+        ["По умолчанию", "Номер: сначала", "Номер: конец", "Цена: ниже", "Цена: выше", "Название: А-Я", "Название: Я-А"],
+    )
 
     result = df.copy()
+
     if query.strip():
         result = result[result["search_blob"].str.contains(query.lower(), na=False)]
     if selected_category != "Все категории":
@@ -571,15 +672,12 @@ def card_info_row(label: str, value: Any) -> str:
     text = clean_str(value)
     if not text:
         return ""
-    return (
-        '<div class="full-info-row">'
-        f'<span class="full-info-label">{html.escape(label)}:</span> {html.escape(text)}'
-        "</div>"
-    )
+    return f'<div class="full-info-row"><span class="full-info-label">{html.escape(label)}:</span> {html.escape(text)}</div>'
 
 
 def render_card(row: pd.Series, show_full: bool = False) -> None:
     image_src = image_to_src(row["primary_image_resolved"])
+
     category = html.escape(clean_str(row["category_nav"]) or "—")
     subcategory = html.escape(clean_str(row["subcategory_nav"]) or "—")
     title = html.escape(clean_str(row["title"]))
@@ -588,11 +686,12 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
     code = html.escape(clean_str(row["code"]))
     display_number = int(row["catalog_number"])
 
+    image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
+
     old_price = ""
     if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
         old_price = f'<div class="old">Цена источника: {html.escape(format_price(row["retail_price_num"]))}</div>'
 
-    image_html = f'<img class="product-image" src="{html.escape(image_src)}" alt="{title}">' if image_src else ""
     full_info = ""
     if show_full:
         dimensions = format_dimensions(row)
@@ -609,49 +708,48 @@ def render_card(row: pd.Series, show_full: bool = False) -> None:
             card_info_row("Источник", row["external_url"]),
         ]
         description = clean_str(row["description"])
-        description_html = (
-            f'<div class="full-description">{html.escape(description)}</div>' if description else ""
-        )
+        description_html = f'<div class="full-description">{html.escape(description)}</div>' if description else ""
         full_info = f'<div class="full-info">{"".join(full_rows)}{description_html}</div>'
 
-    st.markdown(
-        textwrap.dedent(
-            f"""
-            <a class="product-link" href="?product_id={display_number}" target="_self">
-                <div class="product-card">
-                    <div class="num-badge">№ {display_number}</div>
-                    {image_html}
-                    <div class="brand">{brand}</div>
-                    <div class="title">{title}</div>
-                    <div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>
-                    {old_price}
-                    <div class="meta">
-                        Категория: {category}<br>
-                        Подкатегория: {subcategory}<br>
-                        Артикул: {offer_id}<br>
-                        Код: {code}
-                    </div>
-                    {full_info}
-                </div>
-            </a>
-            """
-        ),
-        unsafe_allow_html=True,
+    # Без переносов и отступов: Streamlit Markdown иначе превращает часть HTML в code block.
+    card_html = (
+        f'<a class="product-link" href="?product_id={display_number}" target="_self">'
+        f'<div class="product-card">'
+        f'<div class="num-badge">№ {display_number}</div>'
+        f'{image_html}'
+        f'<div class="brand">{brand}</div>'
+        f'<div class="title">{title}</div>'
+        f'<div class="price">{html.escape(format_price(row["ozon_price_num"]))}</div>'
+        f'{old_price}'
+        f'<div class="meta">'
+        f'Категория: {category}<br>'
+        f'Подкатегория: {subcategory}<br>'
+        f'Артикул: {offer_id}<br>'
+        f'Код: {code}'
+        f'</div>'
+        f'{full_info}'
+        f'</div>'
+        f'</a>'
     )
+
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def render_pagination(page: int, total_pages: int, key_prefix: str) -> None:
     left, mid, right = st.columns([1, 2, 1])
+
     with left:
         if page > 1 and st.button("← Назад", key=f"{key_prefix}_prev", use_container_width=True):
             st.session_state["scroll_to_catalog_top"] = True
             st.query_params["page"] = str(page - 1)
             st.rerun()
+
     with mid:
         st.markdown(
             f"<div style='text-align:center;padding-top:8px;'>Страница {page} из {total_pages}</div>",
             unsafe_allow_html=True,
         )
+
     with right:
         if page < total_pages and st.button("Вперёд →", key=f"{key_prefix}_next", use_container_width=True):
             st.session_state["scroll_to_catalog_top"] = True
@@ -674,6 +772,7 @@ def render_catalog_page(df: pd.DataFrame) -> None:
         show_full_cards = st.checkbox("Вся инфа в карточках", value=False, key="show_full_cards")
 
     st.markdown('<div id="catalog-top-anchor"></div>', unsafe_allow_html=True)
+
     if st.session_state.pop("scroll_to_catalog_top", False):
         components.html(
             """
@@ -691,13 +790,9 @@ def render_catalog_page(df: pd.DataFrame) -> None:
 
     items = list(df.iloc[start:end].iterrows())
 
-    # Важно: рисуем карточки СТРОКАМИ по 4 штуки, а не одной колонкой через idx % 4.
-    # Тогда на широком экране порядок: 1 2 3 4 / 5 6 7 8.
-    # На вертикальном телефоне Streamlit сложит колонки сверху вниз: 1,2,3,4,5,6...
-    # Старый вариант давал на телефоне 1,5,9... из-за вертикального заполнения колонок.
     for row_start in range(0, len(items), 4):
         cols = st.columns(4)
-        for col, (_, row) in zip(cols, items[row_start:row_start + 4]):
+        for col, (_, row) in zip(cols, items[row_start : row_start + 4]):
             with col:
                 render_card(row, show_full=show_full_cards)
 
@@ -739,17 +834,21 @@ def render_product_page(df: pd.DataFrame, product_id: str = "", offer_id: str = 
         st.write(row["full_name"])
 
     left, right = st.columns([1.05, 1])
+
     with left:
         if row["primary_image_resolved"]:
             st.image(row["primary_image_resolved"], width="stretch")
 
     with right:
         st.markdown(f"### {format_price(row['ozon_price_num'])}")
+
         if row["retail_price_num"] and row["retail_price_num"] != row["ozon_price_num"]:
             price_source = clean_str(row.get("price_source"))
             source_suffix = f" ({price_source})" if price_source else ""
             st.markdown(f"Цена источника{source_suffix}: {format_price(row['retail_price_num'])}")
+
         st.markdown(f"**Наличие:** {row['stock_text']}")
+
         if clean_str(row["external_url"]):
             st.link_button("Открыть источник", clean_str(row["external_url"]))
 
@@ -769,7 +868,10 @@ def render_product_page(df: pd.DataFrame, product_id: str = "", offer_id: str = 
         sc1, sc2 = st.columns(2)
         for idx, (label, value) in enumerate(specs):
             with (sc1 if idx % 2 == 0 else sc2):
-                st.markdown(f'<div class="spec"><div class="spec-label">{label}</div><div class="spec-value">{value}</div></div>', unsafe_allow_html=True)
+                st.markdown(
+                    f'<div class="spec"><div class="spec-label">{html.escape(str(label))}</div><div class="spec-value">{html.escape(str(value))}</div></div>',
+                    unsafe_allow_html=True,
+                )
 
     if clean_str(row["description"]):
         st.markdown("### Описание")
@@ -781,20 +883,22 @@ def render_product_page(df: pd.DataFrame, product_id: str = "", offer_id: str = 
 def main() -> None:
     st.set_page_config(page_title="Catalog 500 Exact", page_icon="🛒", layout="wide")
     inject_css()
+
     df = load_catalog()
 
     st.markdown(
         """
-        <div class="topbar">
-            <h1>Catalog 500 Exact</h1>
-            <p>Витрина: 500 не метражных товаров с точным совпадением по артикулу/коду, фото, категориями и supplier-ценами.</p>
-        </div>
+<div class="topbar">
+    <h1>Catalog 500 Exact</h1>
+    <p>Витрина: 500 не метражных товаров с точным совпадением по артикулу/коду, фото, категориями и supplier-ценами.</p>
+</div>
         """,
         unsafe_allow_html=True,
     )
 
     product_id = st.query_params.get("product_id", "")
     offer_id = st.query_params.get("offer_id", "")
+
     if product_id or offer_id:
         render_product_page(df, product_id=product_id, offer_id=offer_id)
         return
