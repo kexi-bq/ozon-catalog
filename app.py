@@ -521,7 +521,9 @@ def format_price(value: float | int | None) -> str:
 def format_dimensions(row: pd.Series) -> str:
     source_dimensions = clean_str(row.get("source_dimensions_text"))
     if source_dimensions:
-        return add_dimension_unit_if_missing(source_dimensions, row)
+        normalized_source = normalize_source_dimensions(source_dimensions, row)
+        if normalized_source:
+            return normalized_source
 
     # Collect possible dimension fields and unit
     unit = clean_str(row.get("dimension_unit") or row.get("dimension_unit_mm") or "")
@@ -572,13 +574,82 @@ def infer_dimension_unit(row: pd.Series) -> str:
     return "мм"
 
 
-def add_dimension_unit_if_missing(value: str, row: pd.Series) -> str:
+def numeric_dimension_values(row: pd.Series) -> list[float]:
+    values: list[float] = []
+    for key in ["length", "width", "height"]:
+        value = clean_float(row.get(key))
+        if value and value > 0:
+            values.append(float(value))
+    return values
+
+
+def infer_source_dimension_unit(value: str, row: pd.Series) -> str:
+    text = clean_str(value).lower().replace("ё", "е")
+    title = clean_str(row.get("title")).lower().replace("ё", "е")
+    haystack = f"{title} {text}"
+
+    if "мм" in haystack or " mm" in haystack:
+        return "мм"
+    if "см" in haystack or " cm" in haystack:
+        return "см"
+
+    numbers = [float(x.replace(",", ".")) for x in re.findall(r"\d+(?:[,.]\d+)?", text)]
+    dims = numeric_dimension_values(row)
+    if numbers and dims:
+        # If source says "Длина: 30" and numeric fields are 9 x 9 x 30, the source is usually centimeters.
+        if max(dims) <= 100 and any(abs(number - dim) < 0.01 for number in numbers for dim in dims):
+            return "см"
+        # If source says "Длина: 205" and numeric length is 205, that is usually millimeters.
+        if any(dim >= 100 and abs(number - dim) < 0.01 for number in numbers for dim in dims):
+            return "мм"
+
+    return infer_dimension_unit(row)
+
+
+def trim_source_dimension_noise(value: str) -> str:
     text = clean_str(value)
-    if not text or text_has_dimension_unit(text):
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text)
+    # Some parsed descriptions accidentally include logistics/manufacturer text after dimensions.
+    stop_words = [
+        " Производитель:",
+        " Производитель :",
+        " ПРОИЗВОДИТЕЛЬ",
+        " Производитель ",
+        " Страна",
+        " Цвет:",
+        " Материал:",
+        " МАТЕРИАЛ",
+        " Доставка",
+        " Способы доставки",
+        " Наши магазины",
+    ]
+    cut_at = min([text.find(word) for word in stop_words if text.find(word) > 0] or [len(text)])
+    return text[:cut_at].strip(" ;,.")
+
+
+def normalize_dimension_text_units(value: str) -> str:
+    text = clean_str(value)
+    text = re.sub(r"(?<=\d)\s*(мм|см)\b", r" \1", text, flags=re.I)
+    text = re.sub(r"\b(мм|см)\s+\1\b", r"\1", text, flags=re.I)
+    text = re.sub(r"\s*;\s*", "; ", text)
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def normalize_source_dimensions(value: str, row: pd.Series) -> str:
+    text = clean_str(value)
+    if not text:
+        return ""
+    text = trim_source_dimension_noise(text)
+    text = normalize_dimension_text_units(text)
+
+    if not text or not any(ch.isdigit() for ch in text):
+        return ""
+    if text_has_dimension_unit(text):
         return text
-    if not any(ch.isdigit() for ch in text):
-        return text
-    unit = infer_dimension_unit(row)
+    unit = infer_source_dimension_unit(text, row)
     return f"{text} {unit}".strip()
 
 
