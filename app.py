@@ -978,9 +978,12 @@ def render_catalog_page(df: pd.DataFrame) -> None:
     start = (page - 1) * PAGE_SIZE
     end = start + PAGE_SIZE
 
-    _, toggle_col = st.columns([3, 1])
-    with toggle_col:
-        show_full_cards = st.checkbox("Вся инфа в карточках", value=False, key="show_full_cards")
+    show_full_cards = st.sidebar.checkbox(
+        "Показывать все данные в карточках",
+        value=False,
+        key="show_full_cards",
+        help="Раскрывает описание, габариты, вес, Ozon-категорию, источник и другие поля прямо в каталоге.",
+    )
 
     st.markdown('<div id="catalog-top-anchor"></div>', unsafe_allow_html=True)
 
