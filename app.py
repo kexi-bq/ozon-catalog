@@ -17,9 +17,8 @@ APP_DIR = Path(__file__).resolve().parent
 ROOT = APP_DIR.parent
 
 DATA_CANDIDATES = [
-    APP_DIR / "data" / "ozon_500_unique_real_photo_ready_v2.csv",
-    APP_DIR / "data" / "dimensions_quality_audit.xlsx",
     APP_DIR / "data" / "catalog_500_exact_match.xlsx",
+    APP_DIR / "data" / "ozon_500_unique_real_photo_ready_v2.csv",
 ]
 DATA_PATH = next((p for p in DATA_CANDIDATES if p.exists()), DATA_CANDIDATES[0])
 
@@ -522,7 +521,7 @@ def format_price(value: float | int | None) -> str:
 def format_dimensions(row: pd.Series) -> str:
     source_dimensions = clean_str(row.get("source_dimensions_text"))
     if source_dimensions:
-        return source_dimensions
+        return add_dimension_unit_if_missing(source_dimensions, row)
 
     # Collect possible dimension fields and unit
     unit = clean_str(row.get("dimension_unit") or row.get("dimension_unit_mm") or "")
@@ -547,9 +546,40 @@ def format_dimensions(row: pd.Series) -> str:
     else:
         text = vals[0]
 
-    if unit:
-        return f"{text} {unit}"
-    return text
+    if not unit:
+        # Numeric Ozon dimension fields are stored as millimeters.
+        unit = "мм"
+    return f"{text} {unit}".strip()
+
+
+def text_has_dimension_unit(value: str) -> bool:
+    text = clean_str(value).lower()
+    return any(unit in text for unit in ["мм", "см", " м", "m", "cm", "mm", "дюйм", "фут", "ft", "inch"])
+
+
+def infer_dimension_unit(row: pd.Series) -> str:
+    title = clean_str(row.get("title")).lower().replace("ё", "е")
+    source_dimensions = clean_str(row.get("source_dimensions_text")).lower()
+    haystack = f"{title} {source_dimensions}"
+
+    if "мм" in haystack or " mm" in haystack:
+        return "мм"
+    if "см" in haystack or " cm" in haystack:
+        return "см"
+    if "дюйм" in haystack or " inch" in haystack or " ft" in haystack or "фут" in haystack:
+        return ""
+    # Ozon numeric dimension fields are expected to be millimeters.
+    return "мм"
+
+
+def add_dimension_unit_if_missing(value: str, row: pd.Series) -> str:
+    text = clean_str(value)
+    if not text or text_has_dimension_unit(text):
+        return text
+    if not any(ch.isdigit() for ch in text):
+        return text
+    unit = infer_dimension_unit(row)
+    return f"{text} {unit}".strip()
 
 
 def format_weight(value: Any) -> str:
