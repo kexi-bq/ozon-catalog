@@ -8,3 +8,8 @@ Thumbs.db
 .DS_Store
 data/catalog_500_exact_match.before_live_price_update.xlsx
 data/catalog_500_link_audit_input.csv
+data/catalog_500_exact_match.before_quality_fix_2026-07-18.xlsx
+data/catalog_100_weight_dimension_audit_input.csv
+data/catalog_100_vodnik_weight_check.csv
+data/catalog_500_classification_audit_input.csv
+data/catalog_500_missing_tnved_candidates.csv
