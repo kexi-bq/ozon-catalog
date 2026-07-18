@@ -105,11 +105,6 @@ try {
         }
     }
 
-    $item511Row = 8
-    Set-NumericCell $sheet $sheetNs $item511Row $columns['length'] 140
-    Set-NumericCell $sheet $sheetNs $item511Row $columns['width'] 100
-    Set-NumericCell $sheet $sheetNs $item511Row $columns['height'] 60
-
     $sheetEntry.Delete()
     $newEntry = $archive.CreateEntry('xl/worksheets/sheet1.xml', [IO.Compression.CompressionLevel]::Optimal)
     $settings = New-Object Xml.XmlWriterSettings
