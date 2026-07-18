@@ -6,3 +6,5 @@ __pycache__/
 *.pyo
 Thumbs.db
 .DS_Store
+data/catalog_500_exact_match.before_live_price_update.xlsx
+data/catalog_500_link_audit_input.csv

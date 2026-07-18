@@ -1176,7 +1176,7 @@ def main() -> None:
         """
 <div class="topbar">
     <h1>Catalog 500 Final</h1>
-    <p>Витрина: финальный каталог из файла catalog_500_FINAL_FOR_SITE.xlsx с товарами, ценами, фото и фильтрами.</p>
+    <p>Витрина: актуальный каталог из файла catalog_500_exact_match.xlsx с товарами, ценами, фото и фильтрами.</p>
 </div>
         """,
         unsafe_allow_html=True,
