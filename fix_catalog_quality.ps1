@@ -1,7 +1,6 @@
 ﻿param(
     [string]$CatalogPath = "data/catalog_500_exact_match.xlsx",
     [string]$InputCsv = "data/catalog_500_classification_audit_input.csv",
-    [string]$RefreshCsv = "data/catalog_500_exact_match_live_refresh_progress.csv",
     [string]$ReportCsv = "data/catalog_500_quality_fix_2026-07-18.csv"
 )
 
@@ -135,32 +134,10 @@ function Get-TnvedAssignment([string]$Title, [string]$TypeId) {
     return [pscustomobject]@{ code=$fallback; confidence='low'; rule="type fallback $TypeId" }
 }
 
-$weights = @{
-    11=50; 13=2190; 14=2680; 24=150; 29=100; 36=1270; 37=1260; 38=850;
-    39=350; 40=30; 41=410; 42=30; 51=300; 52=1500; 91=11700; 98=730; 99=120;
-    150=2460; 239=40; 432=33
-}
-$dimensions = @{
-    14=@(510,365,230); 15=@(375,280,70); 16=@(600,360,70); 17=@(380,380,70);
-    18=@(510,460,70); 24=@(129,134,115); 25=@(500,350,300); 36=@(340,135,190);
-    37=@(340,135,190); 38=@(1800,190,61); 48=@(1100,240,240); 52=@(380,280,130);
-    69=@(140,140,90); 98=@(48,39,48); 171=@(840,250,220); 298=@(150,83,47);
-    302=@(160,160,70); 317=@(800,350,270); 325=@(61,43,19); 330=@(64,22.5,34);
-    331=@(64,22.5,34)
-}
-
 $resolved = (Resolve-Path $CatalogPath).Path
 $backup = Join-Path (Split-Path $resolved) 'catalog_500_exact_match.before_quality_fix_2026-07-18.xlsx'
 Copy-Item $resolved $backup -Force
 $sourceRows = Import-Csv $InputCsv
-$refreshRows = Import-Csv $RefreshCsv
-$rowsByOffer = @{}
-foreach ($row in $sourceRows) { $rowsByOffer[(Repair-Text $row.offer_id)] = $row }
-$placeholderIndexes = @($refreshRows |
-    Where-Object { $_.source_weight_text -eq '90 г' } |
-    ForEach-Object { $rowsByOffer[$_.offer_id] } |
-    Where-Object { $_ -and [int]$_.index -ge 101 } |
-    ForEach-Object { [int]$_.index })
 $report = @()
 
 $archive = [IO.Compression.ZipFile]::Open($resolved, [IO.Compression.ZipArchiveMode]::Update)
@@ -186,25 +163,6 @@ try {
         $columns[$name] = Get-ColumnNumber $cell.r
     }
 
-    foreach ($index in $weights.Keys) {
-        Set-NumericCell $sheet $sheetNs ([int]$index + 1) $columns['weight'] $weights[$index]
-    }
-    foreach ($index in $placeholderIndexes) {
-        Clear-Cell $sheet $sheetNs ([int]$index + 1) $columns['weight']
-        Clear-Cell $sheet $sheetNs ([int]$index + 1) $columns['source_weight_text']
-    }
-    foreach ($index in $dimensions.Keys) {
-        $values = $dimensions[$index]
-        Set-NumericCell $sheet $sheetNs ([int]$index + 1) $columns['length'] $values[0]
-        Set-NumericCell $sheet $sheetNs ([int]$index + 1) $columns['width'] $values[1]
-        Set-NumericCell $sheet $sheetNs ([int]$index + 1) $columns['height'] $values[2]
-    }
-
-    # Product 511 has no supplier-published package dimensions.
-    foreach ($field in @('length','width','height')) {
-        Clear-Cell $sheet $sheetNs 8 $columns[$field]
-    }
-
     foreach ($item in ($sourceRows | Where-Object { !$_.tnved })) {
         $assignment = Get-TnvedAssignment (Repair-Text $item.title) $item.type_id
         Set-TextCell $sheet $sheetNs ([int]$item.index + 1) $columns['tnved'] $assignment.code
@@ -226,9 +184,6 @@ finally {
 }
 
 $report | Export-Csv $ReportCsv -NoTypeInformation -Encoding UTF8
-Write-Output "Corrected weights: $($weights.Count)"
-Write-Output "Corrected dimensions: $($dimensions.Count)"
-Write-Output "Cleared unverified 90 g placeholders: $($placeholderIndexes.Count)"
 Write-Output "Filled TN VED: $($report.Count)"
 $report | Group-Object confidence | Sort-Object Name | Format-Table Count, Name -AutoSize
 
